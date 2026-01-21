@@ -228,7 +228,7 @@ def circuit (n : ℕ) (hn : 2^(n+1) < p) : FormalCircuit (F p) fieldPair field w
   output _ i := var ⟨ i + n + 1 ⟩
   output_eq := by simp +arith [circuit_norm, main, Num2Bits.circuit]
 
-  Assumptions := fun (x, y) => x.val < 2^n ∧ y.val ≤ 2^n
+  Assumptions := fun (x, y) => x.val < 2^n ∧ y.val < 2^n
 
   Spec := fun (x, y) output =>
     output = (if x.val < y.val then 1 else 0)
@@ -424,62 +424,77 @@ template LessEqThan(n) {
     lt.out ==> out;
 }
 -/
+
+/-- LessEqThan circuit with strengthened assumption to ensure y+1 doesn't overflow the n-bit range.
+    We require y.val + 1 < 2^n (equivalently y.val < 2^n - 1 when n > 0) so that LessThan's
+    assumptions are satisfied when we pass (x, y+1) to it. -/
 def circuit (n : ℕ) (hn : 2^(n+1) < p) : FormalCircuit (F p) fieldPair field where
   main := fun (x, y) =>
     LessThan.circuit n hn (x, y + 1)
 
   localLength _ := n + 2
 
-  Assumptions := fun (x, y) => x.val < 2^n ∧ y.val < 2^n
+  -- Strengthened assumption: y.val + 1 < 2^n ensures (y+1).val < 2^n for LessThan
+  Assumptions := fun (x, y) => x.val < 2^n ∧ y.val + 1 < 2^n
+
   Spec := fun (x, y) output =>
     output = (if x.val <= y.val then 1 else 0)
 
   soundness := by
-    intro i env input (x, y) h_input h_assumptions h_holds
-    simp_all only [circuit_norm, LessThan.circuit, Prod.mk.injEq]
+    circuit_proof_start
+    simp only [circuit_norm, LessThan.circuit] at h_holds ⊢
+    rcases h_assumptions with ⟨hx_bound, hy_bound⟩
 
-    have two_exp_n_lt_p : 2^n < p := by
-      have : 2^n ≤ 2^(n+1) := by
-        simp [pow_succ]
-      exact lt_of_le_of_lt this hn
+    -- Extract the input evaluations from h_input
+    have hx_eval : Expression.eval env input_var.1 = input.1 := by
+      simpa using congrArg Prod.fst h_input
+    have hy_eval : Expression.eval env input_var.2 = input.2 := by
+      simpa using congrArg Prod.snd h_input
 
-    have hy_p : y.val + 1 < p :=
-      lt_of_le_of_lt (Nat.succ_le_of_lt h_assumptions.right) two_exp_n_lt_p
+    have hy_add_lt_p : input.2.val + (1 : F p).val < p := by
+      have h_2n_lt : 2^n < 2^(n+1) := by gcongr; repeat linarith
+      simp only [ZMod.val_one]
+      calc input.2.val + 1 < 2^n := hy_bound
+        _ < 2^(n+1) := h_2n_lt
+        _ < p := hn
 
-    have hy_val : (y + 1).val = y.val + 1 := by
-      have hy_p' : y.val + (1 : F p).val < p := by
-        simpa [ZMod.val_one] using hy_p
-      simpa [ZMod.val_one] using (ZMod.val_add_of_lt hy_p')
+    have hy1_lt : (input.2 + 1).val < 2^n := by
+      rw [ZMod.val_add_of_lt hy_add_lt_p, ZMod.val_one]
+      exact hy_bound
 
-    have hy_le : (y + 1).val ≤ 2^n := by
-      rw [hy_val]
-      exact Nat.succ_le_of_lt h_assumptions.right
-
-    have h_lt := h_holds hy_le
-    simpa [hy_val, Nat.lt_add_one_iff] using h_lt
+    -- Rewrite h_holds using the evaluations
+    simp only [hx_eval, hy_eval] at h_holds
+    specialize h_holds ⟨hx_bound, hy1_lt⟩
+    rw [ZMod.val_add_of_lt hy_add_lt_p, ZMod.val_one] at h_holds
+    simp only [Nat.lt_add_one_iff] at h_holds
+    exact h_holds
 
   completeness := by
-    intro i env input h_env (x, y) h_input h_assumptions
-    simp_all only [circuit_norm, LessThan.circuit, Prod.mk.injEq]
+    circuit_proof_start
+    simp only [circuit_norm, LessThan.circuit] at *
+    rcases h_assumptions with ⟨hx_bound, hy_bound⟩
 
-    have two_exp_n_lt_p : 2^n < p := by
-      have : 2^n ≤ 2^(n+1) := by
-        simp [pow_succ]
-      exact lt_of_le_of_lt this hn
+    -- Extract the input evaluations from h_input
+    have hx_eval : Expression.eval env input_var.1 = input.1 := by
+      simpa using congrArg Prod.fst h_input
+    have hy_eval : Expression.eval env input_var.2 = input.2 := by
+      simpa using congrArg Prod.snd h_input
 
-    have hy_p : y.val + 1 < p :=
-      lt_of_le_of_lt (Nat.succ_le_of_lt h_assumptions.right) two_exp_n_lt_p
+    have hy_add_lt_p : input.2.val + (1 : F p).val < p := by
+      have h_2n_lt : 2^n < 2^(n+1) := by gcongr; repeat linarith
+      simp only [ZMod.val_one]
+      calc input.2.val + 1 < 2^n := hy_bound
+        _ < 2^(n+1) := h_2n_lt
+        _ < p := hn
 
-    have hy_val : (y + 1).val = y.val + 1 := by
-      have hy_p' : y.val + (1 : F p).val < p := by
-        simpa [ZMod.val_one] using hy_p
-      simpa [ZMod.val_one] using (ZMod.val_add_of_lt hy_p')
+    have hy1_lt : (input.2 + 1).val < 2^n := by
+      rw [ZMod.val_add_of_lt hy_add_lt_p, ZMod.val_one]
+      exact hy_bound
 
-    have hy_le : (y + 1).val ≤ 2^n := by
-      rw [hy_val]
-      exact Nat.succ_le_of_lt h_assumptions.right
+    -- Rewrite using the evaluations and prove the conjunction
+    simp only [hx_eval, hy_eval]
+    exact ⟨hx_bound, hy1_lt⟩
 
-    exact hy_le
 end LessEqThan
 
 namespace GreaterThan
@@ -507,19 +522,10 @@ def circuit (n : ℕ) (hn : 2^(n+1) < p) : FormalCircuit (F p) fieldPair field w
     output = (if x.val > y.val then 1 else 0)
 
   soundness := by
-    intro i env input (x, y) h_input h_assumptions h_holds
-    simp_all only [circuit_norm, LessThan.circuit, Prod.mk.injEq]
-
-    have hx_le : x.val ≤ 2^n := Nat.le_of_lt h_assumptions.left
-    have h_lt := h_holds hx_le
-    simpa using h_lt
+    simp_all [circuit_norm, LessThan.circuit]
 
   completeness := by
-    intro i env input h_env (x, y) h_input h_assumptions
-    simp_all only [circuit_norm, LessThan.circuit, Prod.mk.injEq]
-
-    have hx_le : x.val ≤ 2^n := Nat.le_of_lt h_assumptions.left
-    exact hx_le
+    simp_all [circuit_norm, LessThan.circuit]
 end GreaterThan
 
 namespace GreaterEqThan
@@ -535,62 +541,79 @@ template GreaterEqThan(n) {
     lt.out ==> out;
 }
 -/
+
+/-- GreaterEqThan circuit with strengthened assumption to ensure x+1 doesn't overflow the n-bit range.
+    We require x.val + 1 < 2^n so that LessThan's assumptions are satisfied when we pass (y, x+1) to it. -/
 def circuit (n : ℕ) (hn : 2^(n+1) < p) : FormalCircuit (F p) fieldPair field where
   main := fun (x, y) =>
     LessThan.circuit n hn (y, x + 1)
 
   localLength _ := n + 2
 
-  Assumptions := fun (x, y) => x.val < 2^n ∧ y.val < 2^n
+  -- Strengthened assumption: x.val + 1 < 2^n ensures (x+1).val < 2^n for LessThan
+  Assumptions := fun (x, y) => x.val + 1 < 2^n ∧ y.val < 2^n
+
   Spec := fun (x, y) output =>
     output = (if x.val >= y.val then 1 else 0)
 
   soundness := by
-    intro i env input (x, y) h_input h_assumptions h_holds
-    simp_all only [circuit_norm, LessThan.circuit, Prod.mk.injEq]
+    circuit_proof_start
+    simp only [circuit_norm, LessThan.circuit] at h_holds ⊢
+    rcases h_assumptions with ⟨hx_bound, hy_bound⟩
 
-    have two_exp_n_lt_p : 2^n < p := by
-      have : 2^n ≤ 2^(n+1) := by
-        simp [pow_succ]
-      exact lt_of_le_of_lt this hn
+    -- Extract the input evaluations from h_input
+    have hx_eval : Expression.eval env input_var.1 = input.1 := by
+      simpa using congrArg Prod.fst h_input
+    have hy_eval : Expression.eval env input_var.2 = input.2 := by
+      simpa using congrArg Prod.snd h_input
 
-    have hx_p : x.val + 1 < p :=
-      lt_of_le_of_lt (Nat.succ_le_of_lt h_assumptions.left) two_exp_n_lt_p
+    have hx_add_lt_p : input.1.val + (1 : F p).val < p := by
+      have h_2n_lt : 2^n < 2^(n+1) := by gcongr; repeat linarith
+      simp only [ZMod.val_one]
+      calc input.1.val + 1 < 2^n := hx_bound
+        _ < 2^(n+1) := h_2n_lt
+        _ < p := hn
 
-    have hx_val : (x + 1).val = x.val + 1 := by
-      have hx_p' : x.val + (1 : F p).val < p := by
-        simpa [ZMod.val_one] using hx_p
-      simpa [ZMod.val_one] using (ZMod.val_add_of_lt hx_p')
+    have hx1_lt : (input.1 + 1).val < 2^n := by
+      rw [ZMod.val_add_of_lt hx_add_lt_p, ZMod.val_one]
+      exact hx_bound
 
-    have hx_le : (x + 1).val ≤ 2^n := by
-      rw [hx_val]
-      exact Nat.succ_le_of_lt h_assumptions.left
-
-    have h_lt := h_holds hx_le
-    simpa [hx_val, Nat.lt_add_one_iff] using h_lt
+    -- Rewrite h_holds using the evaluations
+    simp only [hx_eval, hy_eval] at h_holds
+    specialize h_holds ⟨hy_bound, hx1_lt⟩
+    rw [ZMod.val_add_of_lt hx_add_lt_p, ZMod.val_one] at h_holds
+    -- LessThan gives: output = if y.val < x.val + 1 then 1 else 0
+    -- We need: output = if x.val >= y.val then 1 else 0
+    -- y.val < x.val + 1 ↔ y.val ≤ x.val ↔ x.val ≥ y.val
+    simp only [Nat.lt_add_one_iff] at h_holds
+    exact h_holds
 
   completeness := by
-    intro i env input h_env (x, y) h_input h_assumptions
-    simp_all only [circuit_norm, LessThan.circuit, Prod.mk.injEq]
+    circuit_proof_start
+    simp only [circuit_norm, LessThan.circuit] at *
+    rcases h_assumptions with ⟨hx_bound, hy_bound⟩
 
-    have two_exp_n_lt_p : 2^n < p := by
-      have : 2^n ≤ 2^(n+1) := by
-        simp [pow_succ]
-      exact lt_of_le_of_lt this hn
+    -- Extract the input evaluations from h_input
+    have hx_eval : Expression.eval env input_var.1 = input.1 := by
+      simpa using congrArg Prod.fst h_input
+    have hy_eval : Expression.eval env input_var.2 = input.2 := by
+      simpa using congrArg Prod.snd h_input
 
-    have hx_p : x.val + 1 < p :=
-      lt_of_le_of_lt (Nat.succ_le_of_lt h_assumptions.left) two_exp_n_lt_p
+    have hx_add_lt_p : input.1.val + (1 : F p).val < p := by
+      have h_2n_lt : 2^n < 2^(n+1) := by gcongr; repeat linarith
+      simp only [ZMod.val_one]
+      calc input.1.val + 1 < 2^n := hx_bound
+        _ < 2^(n+1) := h_2n_lt
+        _ < p := hn
 
-    have hx_val : (x + 1).val = x.val + 1 := by
-      have hx_p' : x.val + (1 : F p).val < p := by
-        simpa [ZMod.val_one] using hx_p
-      simpa [ZMod.val_one] using (ZMod.val_add_of_lt hx_p')
+    have hx1_lt : (input.1 + 1).val < 2^n := by
+      rw [ZMod.val_add_of_lt hx_add_lt_p, ZMod.val_one]
+      exact hx_bound
 
-    have hx_le : (x + 1).val ≤ 2^n := by
-      rw [hx_val]
-      exact Nat.succ_le_of_lt h_assumptions.left
+    -- Prove the conjunction for LessThan's assumptions: y.val < 2^n ∧ (x+1).val < 2^n
+    simp only [hx_eval, hy_eval]
+    exact ⟨hy_bound, hx1_lt⟩
 
-    exact hx_le
 end GreaterEqThan
 
 end Circomlib
