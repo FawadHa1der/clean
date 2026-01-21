@@ -44,7 +44,13 @@ def main (ct : ℕ) (input : Vector (Expression (F p)) 254) := do
   return out
 
 set_option maxRecDepth 2000 in
+<<<<<<< HEAD
 def circuit (c : ℕ) (h_c : c < 2^254) : FormalCircuit (F p) (fields 254) field where
+=======
+-- set_option maxHeartbeats 12000000 in
+set_option maxRecDepth 2000 in
+def circuit (c : ℕ) : FormalCircuit (F p) (fields 254) field where
+>>>>>>> ba11271d (soundness and completeness proofs for CompConstant)
   main := main c
   localLength _ := 127 + 1 + 135 + 1  -- parts witness + sout witness + Num2Bits + out witness
   localLength_eq := by simp only [circuit_norm, main, Num2Bits.circuit]
@@ -60,6 +66,10 @@ def circuit (c : ℕ) (h_c : c < 2^254) : FormalCircuit (F p) (fields 254) field
 
   soundness := by
     circuit_proof_start [Num2Bits.circuit]
+<<<<<<< HEAD
+=======
+    rcases h_assumptions with ⟨h_bits, h_ct⟩
+>>>>>>> ba11271d (soundness and completeness proofs for CompConstant)
     rcases h_holds with ⟨h_parts, h_holds⟩
     rcases h_holds with ⟨h_sout, h_holds⟩
     rcases h_holds with ⟨h_num2bits, h_out⟩
@@ -95,11 +105,21 @@ def circuit (c : ℕ) (h_c : c < 2^254) : FormalCircuit (F p) (fields 254) field
       have h_int_eq_nat_sub : ((2^128 - 2^(i : ℕ) : ℤ) : F p) = ((2^128 - 2^(i : ℕ) : ℕ) : F p) := by
         rw [Int.cast_sub, Nat.cast_sub h_pow_le]
         simp only [Int.cast_pow, Int.cast_ofNat, Nat.cast_pow, Nat.cast_ofNat]
+<<<<<<< HEAD
       simp_rw [h_int_eq_nat_sub]
       simp only [Nat.cast_pow, Nat.cast_ofNat, Nat.cast_sub h_pow_le]
       split_ifs <;> ring
 
     have h_sum_encodes := sum_bit127_encodes_gt c h_c input h_assumptions parts h_parts'
+=======
+      have h_int_eq_nat_pow : ((2^(i : ℕ) : ℤ) : F p) = ((2^(i : ℕ) : ℕ) : F p) := by
+        simp only [Int.cast_pow, Int.cast_ofNat, Nat.cast_pow, Nat.cast_ofNat]
+      simp_rw [h_int_eq_nat_sub, h_int_eq_nat_pow]
+      simp only [Nat.cast_pow, Nat.cast_ofNat, Nat.cast_sub h_pow_le]
+      split_ifs <;> ring
+
+    have h_sum_encodes := sum_bit127_encodes_gt c h_ct input h_bits parts h_parts'
+>>>>>>> ba11271d (soundness and completeness proofs for CompConstant)
 
     have h_sout' : parts.sum = sout := by
       show (Vector.mapRange 127 fun i => env.get (i₀ + i)).sum = env.get (i₀ + 127)
@@ -250,6 +270,7 @@ def circuit (c : ℕ) (h_c : c < 2^254) : FormalCircuit (F p) (fields 254) field
       have h_sout_val : parts.sum.val = sout.val := congrArg ZMod.val h_sout'
       simpa [h_sout_val] using h_parts_sum_lt
 
+<<<<<<< HEAD
     and_intros
     · ext i hi
       have h_parts_i := h_parts ⟨i, hi⟩
@@ -258,6 +279,12 @@ def circuit (c : ℕ) (h_c : c < 2^254) : FormalCircuit (F p) (fields 254) field
     · exact h_sout_lt
     · exact h_out
 
+=======
+    refine And.intro ?_ (And.intro h_sout (And.intro h_sout_lt h_out))
+    ext i hi
+    have h_parts_i := h_parts ⟨i, hi⟩
+    simpa [Vector.getElem_map, Vector.getElem_mapRange] using h_parts_i
+>>>>>>> ba11271d (soundness and completeness proofs for CompConstant)
 end CompConstant
 
 end Circomlib
