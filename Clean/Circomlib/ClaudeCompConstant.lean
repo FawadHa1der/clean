@@ -1,4 +1,5 @@
 import Clean.Circuit
+import Clean.Circuit.SimpGadget
 import Clean.Utils.Bits
 import Clean.Circomlib.Bitify
 
@@ -56,12 +57,13 @@ def signalPairValF (slsb smsb : F p) : ℕ := smsb.val * 2 + slsb.val
 def constPairValAt (i : ℕ) (ct : ℕ) : ℕ :=
   ((ct >>> (i * 2 + 1)) &&& 1) * 2 + ((ct >>> (i * 2)) &&& 1)
 
+omit [Fact (p < 2 ^ 254)] in
 /-- Key characterization: computePart encodes pair comparison.
-    When signal pair > constant pair: contributes bCoeff i (≈ 2^128 - 2^i)
+    When signal pair > constant pair: contributes bCoeff i (~ 2^128 - 2^i)
     When signal pair = constant pair: contributes 0
     When signal pair < constant pair: contributes aCoeff i (= 2^i)
 
-    Proof approach: 16 case analysis on (cmsb, clsb) × (smsb, slsb).
+    Proof approach: 16 case analysis on (cmsb, clsb) * (smsb, slsb).
     For each case, verify the circuit formula matches the expected output.
 
     Example case (cmsb=0, clsb=0, smsb=1, slsb=0):
@@ -70,8 +72,7 @@ def constPairValAt (i : ℕ) (ct : ℕ) : ℕ :=
 
     Example case (cmsb=1, clsb=1, smsb=0, slsb=1):
     - c_pair = 3, s_pair = 1, so s_pair < c_pair
-    - Circuit computes: -a*0*1 + a = a = 2^i
--/
+    - Circuit computes: -a*0*1 + a = a = 2^i -/
 lemma computePart_characterization (i : ℕ) (hi : i < 127) (slsb smsb : F p)
     (h_slsb : slsb = 0 ∨ slsb = 1) (h_smsb : smsb = 0 ∨ smsb = 1) (ct : ℕ) :
     let s_pair := signalPairValF slsb smsb
@@ -137,45 +138,6 @@ lemma computePart_characterization (i : ℕ) (hi : i < 127) (slsb smsb : F p)
               show (0 - ↑(aCoeff i) + ↑(aCoeff i) : F p) = 0 by ring,
               show (-↑(aCoeff i) + ↑(aCoeff i) : F p) = 0 by ring,
               h_aCoeff_val, h_bCoeff_val, ZMod.val_zero])
-
-/-- The sum formula: characterize the sum of parts in terms of comparison positions.
-    Let W = set of positions where signal wins (s_pair > c_pair)
-    Let L = set of positions where signal loses (s_pair < c_pair)
-    Then sum = Σ_{i∈W} (2^128 - 2^i) + Σ_{i∈L} 2^i -/
-lemma sum_parts_formula (ct : ℕ) (input : Vector (F p) 254)
-    (h_bits : ∀ i (_ : i < 254), input[i] = 0 ∨ input[i] = 1)
-    (parts : Vector (F p) 127)
-    (h_parts : ∀ i : Fin 127,
-      parts[i] = computePart i.val input[i.val * 2] input[i.val * 2 + 1] ct) :
-    ∃ (W L : Finset (Fin 127)),
-      Disjoint W L ∧
-      (∀ i : Fin 127, i ∈ W ↔ signalPairValF input[i.val * 2] input[i.val * 2 + 1] >
-                              constPairValAt i.val ct) ∧
-      (∀ i : Fin 127, i ∈ L ↔ signalPairValF input[i.val * 2] input[i.val * 2 + 1] <
-                              constPairValAt i.val ct) ∧
-      parts.sum.val = (W.sum fun i => 2^128 - 2^i.val) + (L.sum fun i => 2^i.val) := by
-  sorry
-
-/-- Core comparison encoding theorem.
-    The key insight: input > ct iff there exists k such that:
-    1. At position k, signal pair > constant pair
-    2. For all j > k, signal pair = constant pair
-
-    When this happens, the sum has a term (2^128 - 2^k) that dominates,
-    giving sum ≥ 2^127 (since 2^128 - 2^k ≥ 2^128 - 2^126 > 2^127).
-
-    Conversely, when input ≤ ct, all "win" positions are dominated by
-    a "lose" at some higher position, keeping sum < 2^127. -/
-lemma sum_encodes_comparison (ct : ℕ) (h_ct : ct < 2^254)
-    (input : Vector (F p) 254)
-    (h_bits : ∀ i (_ : i < 254), input[i] = 0 ∨ input[i] = 1)
-    (parts : Vector (F p) 127)
-    (h_parts : ∀ i : Fin 127,
-      parts[i] = computePart i.val input[i.val * 2] input[i.val * 2 + 1] ct) :
-    let sum := parts.sum
-    let input_val := fromBits (input.map ZMod.val)
-    (sum.val ≥ 2^127) ↔ (input_val > ct) := by
-  sorry
 
 /-! ### Helper lemmas for sum_range_precise -/
 
@@ -277,6 +239,173 @@ lemma fromBits_shiftRight_mod4 {n : ℕ} (bits : Vector ℕ n) (k : ℕ)
   rw [shiftRight_mod4_eq_bits]
   rw [fromBits_testBit_eq bits k h_bits (Nat.lt_of_succ_lt hk)]
   rw [fromBits_testBit_eq bits (k+1) h_bits hk]
+
+/-- Helper: 4^k = 2^(2*k) -/
+lemma four_pow_eq_two_pow_double (k : ℕ) : (4:ℕ)^k = 2^(2*k) := by
+  calc (4:ℕ)^k = (2^2)^k := by norm_num
+    _ = 2^(2*k) := by rw [← Nat.pow_mul]
+
+/-- Helper lemma: If x and y agree on all "pairs" above position k, then their high parts are equal.
+    Specifically: x / 4^(k+1) = y / 4^(k+1). -/
+lemma high_parts_eq_of_pairs_eq_above (x y k : ℕ)
+    (h_above : ∀ j : Fin 127, j.val > k → (x >>> (j.val * 2)) % 4 = (y >>> (j.val * 2)) % 4)
+    (hx : x < 2^254) (hy : y < 2^254) :
+    x / 4^(k + 1) = y / 4^(k + 1) := by
+  -- The high part x / 4^(k+1) consists of pairs at positions k+1, k+2, ..., 126
+  -- Since all these pairs are equal, the high parts are equal
+  apply Nat.eq_of_testBit_eq
+  intro i
+  -- Bit i of x / 4^(k+1) is bit i + 2*(k+1) of x
+  simp only [Nat.testBit, Nat.shiftRight_eq_div_pow]
+  rw [Nat.div_div_eq_div_mul, Nat.div_div_eq_div_mul]
+  have h4pow : (4 : ℕ)^(k+1) = 2^(2*(k+1)) := four_pow_eq_two_pow_double (k+1)
+  rw [h4pow]
+  rw [Nat.and_comm, Nat.and_one_is_mod, Nat.and_comm, Nat.and_one_is_mod]
+  -- Need to show x / (2^(2*(k+1)) * 2^i) % 2 = y / (2^(2*(k+1)) * 2^i) % 2
+  -- This is bit (2*(k+1) + i) of x and y
+  let bit_pos := 2*(k+1) + i
+  by_cases hbound : bit_pos < 254
+  · -- Within the 254-bit range
+    -- This bit is part of pair at position (bit_pos / 2)
+    let h_pair_pos := bit_pos / 2
+    have h_pair_bound : h_pair_pos ≥ k + 1 := by omega
+    by_cases h_pair_lt_127 : h_pair_pos < 127
+    · -- The pair is within range, use h_above
+      have h_pair_eq := h_above ⟨h_pair_pos, h_pair_lt_127⟩ (by omega : h_pair_pos > k)
+      -- Extract bit equality from pair equality
+      simp only [Nat.shiftRight_eq_div_pow] at h_pair_eq
+      -- h_pair_eq : (x / 2^(h_pair_pos * 2)) % 4 = (y / 2^(h_pair_pos * 2)) % 4
+      by_cases h_even : bit_pos % 2 = 0
+      · -- Even bit: low bit of the pair
+        have hpow_eq : 2^(2*(k+1)) * 2^i = 2^bit_pos := by rw [← Nat.pow_add]
+        rw [hpow_eq]
+        have h_bp_eq : bit_pos = h_pair_pos * 2 := by omega
+        rw [h_bp_eq]
+        have hm : ∀ n : ℕ, n % 4 % 2 = n % 2 := fun n => by omega
+        have h_low : x / 2^(h_pair_pos * 2) % 2 = y / 2^(h_pair_pos * 2) % 2 := by
+          calc x / 2^(h_pair_pos * 2) % 2 = (x / 2^(h_pair_pos * 2) % 4) % 2 := by rw [hm]
+            _ = (y / 2^(h_pair_pos * 2) % 4) % 2 := by rw [h_pair_eq]
+            _ = y / 2^(h_pair_pos * 2) % 2 := by rw [hm]
+        simp only [h_low]
+      · -- Odd bit: high bit of the pair
+        have hpow_eq : 2^(2*(k+1)) * 2^i = 2^bit_pos := by rw [← Nat.pow_add]
+        rw [hpow_eq]
+        have h_bp_eq : bit_pos = h_pair_pos * 2 + 1 := by omega
+        rw [h_bp_eq]
+        have hd : ∀ n : ℕ, n % 4 / 2 = n / 2 % 2 := fun n => by omega
+        have hpow : 2 ^ (h_pair_pos * 2 + 1) = 2 ^ (h_pair_pos * 2) * 2 := by ring
+        have h_high : x / 2 ^ (h_pair_pos * 2 + 1) % 2 = y / 2 ^ (h_pair_pos * 2 + 1) % 2 := by
+          calc x / 2 ^ (h_pair_pos * 2 + 1) % 2 = x / (2 ^ (h_pair_pos * 2) * 2) % 2 := by rw [hpow]
+            _ = x / 2 ^ (h_pair_pos * 2) / 2 % 2 := by rw [Nat.div_div_eq_div_mul]
+            _ = x / 2 ^ (h_pair_pos * 2) % 4 / 2 := by rw [hd]
+            _ = y / 2 ^ (h_pair_pos * 2) % 4 / 2 := by rw [h_pair_eq]
+            _ = y / 2 ^ (h_pair_pos * 2) / 2 % 2 := by rw [hd]
+            _ = y / (2 ^ (h_pair_pos * 2) * 2) % 2 := by rw [Nat.div_div_eq_div_mul]
+            _ = y / 2 ^ (h_pair_pos * 2 + 1) % 2 := by rw [hpow]
+        simp only [h_high]
+    · -- Pair beyond position 126, both high bits are zero
+      have hpow_eq : 2^(2*(k+1)) * 2^i = 2^bit_pos := by rw [← Nat.pow_add]
+      rw [hpow_eq]
+      -- bit_pos >= 254 in this case since h_pair_pos >= 127
+      have h_bp_ge_254 : bit_pos ≥ 254 := by omega
+      omega
+  · -- Beyond 254 bits, both are 0
+    have hpow_eq : 2^(2*(k+1)) * 2^i = 2^bit_pos := by rw [← Nat.pow_add]
+    rw [hpow_eq]
+    have h_pos : 0 < 2^bit_pos := Nat.pow_pos (by omega : 0 < 2)
+    have hx_div : x / 2^bit_pos = 0 := by
+      apply Nat.div_eq_zero_iff.mpr
+      right
+      calc x < 2^254 := hx
+        _ ≤ 2^bit_pos := Nat.pow_le_pow_right (by omega) (by omega)
+    have hy_div : y / 2^bit_pos = 0 := by
+      apply Nat.div_eq_zero_iff.mpr
+      right
+      calc y < 2^254 := hy
+        _ ≤ 2^bit_pos := Nat.pow_le_pow_right (by omega) (by omega)
+    rw [hx_div, hy_div]
+
+/-- Helper: x % (4 * 4^k) = (x / 4^k % 4) * 4^k + x % 4^k -/
+lemma mod_four_pow_succ (x k : ℕ) : x % 4^(k+1) = (x / 4^k % 4) * 4^k + x % 4^k := by
+  have h41 : (4:ℕ)^(k+1) = 4 * 4^k := by ring
+  rw [h41]
+  have h_4k_pos : 0 < 4^k := Nat.pow_pos (by omega : 0 < 4)
+  have h_rem : x % 4^k < 4^k := Nat.mod_lt x h_4k_pos
+  have h_qmod : x / 4^k % 4 < 4 := Nat.mod_lt _ (by omega : 0 < 4)
+  have h_sum_lt : x / 4^k % 4 * 4^k + x % 4^k < 4 * 4^k := by nlinarith
+  -- Key identity: x / 4^k = x / 4^k / 4 * 4 + x / 4^k % 4
+  have h1 : x / 4^k = x / 4^k / 4 * 4 + x / 4^k % 4 := by
+    have := Nat.div_add_mod (x / 4^k) 4; linarith
+  -- x = x / 4^k / 4 * (4 * 4^k) + (x / 4^k % 4 * 4^k + x % 4^k)
+  have h2 : x = x / 4^k / 4 * (4 * 4^k) + (x / 4^k % 4 * 4^k + x % 4^k) := by
+    have h_base := Nat.div_add_mod x (4^k)
+    have h_step1 : x = 4^k * (x / 4^k) + x % 4^k := by linarith
+    have h_step2 : 4^k * (x / 4^k) = x / 4^k / 4 * (4 * 4^k) + x / 4^k % 4 * 4^k := by
+      calc 4^k * (x / 4^k) = 4^k * (x / 4^k / 4 * 4 + x / 4^k % 4) := by
+             conv_lhs => rw [h1]
+        _ = x / 4^k / 4 * 4 * 4^k + x / 4^k % 4 * 4^k := by ring
+        _ = x / 4^k / 4 * (4 * 4^k) + x / 4^k % 4 * 4^k := by ring
+    linarith
+  -- x / 4^k / 4 = x / (4 * 4^k)
+  have h3 : x / 4^k / 4 = x / (4 * 4^k) := by
+    rw [Nat.div_div_eq_div_mul]; ring_nf
+  -- From h2: x = x / (4 * 4^k) * (4 * 4^k) + (x / 4^k % 4 * 4^k + x % 4^k)
+  -- Since x / 4^k % 4 * 4^k + x % 4^k < 4 * 4^k, this is the Euclidean division
+  -- So x % (4 * 4^k) = x / 4^k % 4 * 4^k + x % 4^k
+  rw [h3] at h2
+  -- Use uniqueness of Euclidean division
+  have h_div_mod := Nat.div_add_mod x (4 * 4^k)
+  -- h2 says x = x / (4 * 4^k) * (4 * 4^k) + (x / 4^k % 4 * 4^k + x % 4^k)
+  -- h_div_mod says (4 * 4^k) * (x / (4 * 4^k)) + x % (4 * 4^k) = x
+  -- Since both have the same quotient and the remainder in h2 is < 4 * 4^k,
+  -- they must be equal
+  have h_quot : x / (4 * 4^k) * (4 * 4^k) = (4 * 4^k) * (x / (4 * 4^k)) := by ring
+  rw [h_quot] at h2
+  -- Now h2 : x = (4 * 4^k) * (x / (4 * 4^k)) + (x / 4^k % 4 * 4^k + x % 4^k)
+  -- and h_div_mod : (4 * 4^k) * (x / (4 * 4^k)) + x % (4 * 4^k) = x
+  omega
+
+/-- Key comparison lemma: if high parts are equal and x's pair at k is less than y's pair,
+    then x < y. -/
+lemma lt_of_high_eq_and_pair_lt (x y k : ℕ)
+    (h_high_eq : x / 4^(k + 1) = y / 4^(k + 1))
+    (h_pair_lt : (x >>> (k * 2)) % 4 < (y >>> (k * 2)) % 4) :
+    x < y := by
+  -- Convert shift to division
+  simp only [Nat.shiftRight_eq_div_pow] at h_pair_lt
+  -- Use the key fact: 4^k = 2^(k*2)
+  have h4k : (4:ℕ)^k = 2^(k*2) := by rw [four_pow_eq_two_pow_double]; ring_nf
+  have h_pair_lt' : x / 4^k % 4 < y / 4^k % 4 := by rw [h4k]; exact h_pair_lt
+
+  -- Decompose using our helper lemma
+  have h_x_low := mod_four_pow_succ x k
+  have h_y_low := mod_four_pow_succ y k
+
+  -- Bounds on remainders
+  have h_rem_x : x % 4^k < 4^k := Nat.mod_lt x (Nat.pow_pos (by omega : 0 < 4))
+  have h_rem_y : y % 4^k < 4^k := Nat.mod_lt y (Nat.pow_pos (by omega : 0 < 4))
+  have h_4k_pos : 0 < 4^k := Nat.pow_pos (by omega : 0 < 4)
+
+  -- Key step: x % 4^(k+1) < y % 4^(k+1)
+  have h_mod_lt : x % 4^(k+1) < y % 4^(k+1) := by
+    rw [h_x_low, h_y_low]
+    have h_xp_lt_yp : x / 4^k % 4 + 1 ≤ y / 4^k % 4 := h_pair_lt'
+    calc (x / 4^k % 4) * 4^k + x % 4^k
+      < (x / 4^k % 4) * 4^k + 4^k := by omega
+      _ = (x / 4^k % 4 + 1) * 4^k := by ring
+      _ ≤ (y / 4^k % 4) * 4^k := Nat.mul_le_mul_right _ h_xp_lt_yp
+      _ ≤ (y / 4^k % 4) * 4^k + y % 4^k := Nat.le_add_right _ _
+
+  -- Final step: since high parts are equal, comparison is determined by low parts
+  have h_4k1_pos : 0 < 4^(k+1) := Nat.pow_pos (by omega : 0 < 4)
+  have hx_eq : x = x / 4^(k+1) * 4^(k+1) + x % 4^(k+1) := by
+    have h := Nat.div_add_mod x (4^(k+1))
+    linarith
+  have hy_eq : y = y / 4^(k+1) * 4^(k+1) + y % 4^(k+1) := by
+    have h := Nat.div_add_mod y (4^(k+1))
+    linarith
+  rw [hx_eq, hy_eq, h_high_eq]
+  omega
 
 /-- Key lemma: fromBits comparison implies existence of differing pair.
     When x > y as natural numbers represented in little-endian bits,
@@ -398,32 +527,20 @@ lemma exists_msb_win_from_gt (x y : ℕ) (hx : x < 2^254) (hy : y < 2^254) (h_gt
     rcases Nat.lt_trichotomy ((x >>> (k.val * 2)) % 4) ((y >>> (k.val * 2)) % 4) with hlt | heq | hgt
     · -- If x's pair < y's pair at k, then x < y (contradiction with x > y)
       exfalso
-      -- The key insight: x and y can be compared by their most significant differing "digit"
-      -- Since all pairs above k are equal and at k, x's pair < y's pair,
-      -- the number x is less than y in the positional representation.
-      --
-      -- This is a fundamental property of positional number systems:
-      -- If the high-order digits are equal and the most significant differing digit
-      -- of x is less than that of y, then x < y.
-      --
-      -- The proof would involve showing:
-      -- 1. x = x_high * 4^(k+1) + x_low where x_low < 4^(k+1)
-      -- 2. y = y_high * 4^(k+1) + y_low where y_low < 4^(k+1)
-      -- 3. x_high = y_high (from h_above_eq)
-      -- 4. x_low = (x >>> (k*2)) % 4 * 4^k + (x % 4^k)
-      -- 5. y_low = (y >>> (k*2)) % 4 * 4^k + (y % 4^k)
-      -- 6. Since (x >>> (k*2)) % 4 < (y >>> (k*2)) % 4 and remainders < 4^k,
-      --    we have x_low < y_low, hence x < y.
-      -- For now, we leave this as sorry.
-      sorry
+      -- First show high parts are equal
+      have h_high_eq := high_parts_eq_of_pairs_eq_above x y k.val h_above_eq hx hy
+      -- Then use lt_of_high_eq_and_pair_lt to get x < y
+      have h_x_lt_y := lt_of_high_eq_and_pair_lt x y k.val h_high_eq hlt
+      omega
     · -- Equal contradicts hk_mem
       exact absurd heq hk_mem
     · exact hgt
 
   exact ⟨k, h_x_wins, h_above_eq⟩
 
-/-- When input > ct, there exists a MSB position k where signal wins
-    and all higher positions are ties. -/
+-- When input > ct, there exists a MSB position k where signal wins
+--    and all higher positions are ties.
+omit [Fact (p < 2 ^ 254)] [Fact (p > 2 ^ 253)] in
 lemma exists_msb_win_position (ct : ℕ) (h_ct : ct < 2^254)
     (input : Vector (F p) 254)
     (h_bits : ∀ i (_ : i < 254), input[i] = 0 ∨ input[i] = 1)
@@ -556,6 +673,7 @@ lemma exists_msb_win_position (ct : ℕ) (h_ct : ct < 2^254)
 
     rw [h_signal_eq, h_const_eq, h_eq]
 
+omit [Fact (p < 2 ^ 254)] [Fact (p > 2 ^ 253)] in
 /-- When input ≤ ct, either all pairs are ties, or the MSB differing position is a loss. -/
 lemma msb_determines_le (ct : ℕ) (h_ct : ct < 2^254)
     (input : Vector (F p) 254)
@@ -566,9 +684,83 @@ lemma msb_determines_le (ct : ℕ) (h_ct : ct < 2^254)
       signalPairValF input[k.val * 2] input[k.val * 2 + 1] < constPairValAt k.val ct ∧
       ∀ j : Fin 127, j > k →
         signalPairValF input[j.val * 2] input[j.val * 2 + 1] = constPairValAt j.val ct) := by
-  -- Symmetric to exists_msb_win_position: x ≤ y iff either x = y (all pairs equal)
-  -- or there exists MSB pair where x's pair < y's pair and all higher pairs are equal.
-  sorry
+  -- Get the input value
+  let x := fromBits (input.map ZMod.val)
+  have hx_lt : x < 2^254 := by
+    apply fromBits_lt
+    intro i hi
+    simp only [Vector.getElem_map]
+    have hp_gt_1 : 1 < p := Nat.Prime.one_lt ‹Fact (Nat.Prime p)›.elim
+    rcases h_bits i hi with h0 | h1
+    · left; simp only [ZMod.val_eq_zero]; exact h0
+    · right
+      apply_fun ZMod.val at h1
+      simp only [@ZMod.val_one p ⟨hp_gt_1⟩] at h1
+      exact h1
+
+  -- Helper to convert between signal pairs and bit representation
+  have h_signal_pair : ∀ i : Fin 127,
+      signalPairValF input[i.val * 2] input[i.val * 2 + 1] = (x >>> (i.val * 2)) % 4 := by
+    intro i
+    unfold signalPairValF
+    let bits := input.map ZMod.val
+    have h_bits_01 : ∀ (j : ℕ) (hj : j < 254), bits[j] = 0 ∨ bits[j] = 1 := by
+      intro j hj
+      simp only [Vector.getElem_map, bits]
+      have hp_gt_1 : 1 < p := Nat.Prime.one_lt ‹Fact (Nat.Prime p)›.elim
+      rcases h_bits j hj with h0 | h1
+      · left; simp only [ZMod.val_eq_zero]; exact h0
+      · right
+        apply_fun ZMod.val at h1
+        simp only [@ZMod.val_one p ⟨hp_gt_1⟩] at h1
+        exact h1
+    have hi_bound : i.val * 2 + 1 < 254 := by omega
+    have h_fb := fromBits_shiftRight_mod4 bits (i.val * 2) h_bits_01 hi_bound
+    simp only [Vector.getElem_map, bits] at h_fb
+    have h_idx : i.val * 2 + 1 = 1 + i.val * 2 := by omega
+    simp only [h_idx] at h_fb ⊢
+    rw [h_fb]
+    ac_rfl
+
+  have h_const_pair : ∀ i : Fin 127, constPairValAt i.val ct = (ct >>> (i.val * 2)) % 4 := by
+    intro i
+    unfold constPairValAt
+    have h1 : (ct >>> (i.val * 2 + 1)) &&& 1 = (ct >>> (i.val * 2)) / 2 % 2 := by
+      simp only [Nat.shiftRight_add, Nat.shiftRight_one, Nat.and_one_is_mod]
+    have h2 : (ct >>> (i.val * 2)) &&& 1 = (ct >>> (i.val * 2)) % 2 := by
+      simp only [Nat.and_one_is_mod]
+    rw [h1, h2]
+    omega
+
+  -- Case split: either x = ct (all pairs equal) or x < ct (MSB loss)
+  rcases Nat.lt_or_eq_of_le h_le with h_lt | h_eq
+
+  -- Case: x < ct → there exists MSB position where signal loses
+  · right
+    -- Use symmetric logic: ct > x, so there's a MSB position where ct's pair > x's pair
+    obtain ⟨k, hk_gt, hk_eq⟩ := exists_msb_win_from_gt ct x h_ct hx_lt h_lt
+    -- hk_gt : (ct >>> (k * 2)) % 4 > (x >>> (k * 2)) % 4
+    -- i.e., x's pair < ct's pair at k
+
+    use k
+    constructor
+    · -- signalPairValF < constPairValAt
+      rw [h_signal_pair k, h_const_pair k]
+      exact hk_gt
+    · -- All positions j > k have equal pairs
+      intro j hj
+      rw [h_signal_pair j, h_const_pair j]
+      exact (hk_eq j hj).symm
+
+  -- Case: x = ct → all pairs are equal
+  · left
+    intro i
+    rw [h_signal_pair i, h_const_pair i]
+    -- x = fromBits (input.map ZMod.val) = ct by h_eq
+    show x >>> (i.val * 2) % 4 = ct >>> (i.val * 2) % 4
+    -- Since x is defined as fromBits (input.map ZMod.val), and h_eq says this equals ct
+    have hx_eq_ct : x = ct := h_eq
+    rw [hx_eq_ct]
 
 /-! ### Helper lemmas needed by sum_range_precise -/
 
@@ -607,6 +799,7 @@ lemma list_sum_val_bound' {l : List (F p)} {bound : ℕ}
     have := ih h_xs
     linarith
 
+omit [Fact (p < 2 ^ 254)] in
 /-- computePart value is bounded by 2^128 when inputs are boolean and i < 127. -/
 lemma computePart_val_bound' (i : ℕ) (hi : i < 127) (slsb smsb : F p)
     (h_slsb : slsb = 0 ∨ slsb = 1) (h_smsb : smsb = 0 ∨ smsb = 1) (ct : ℕ) :
@@ -646,17 +839,24 @@ lemma sum_parts_bounded' (parts : Vector (F p) 127)
   rw [list_sum_val_eq' h_sum_lt_p]
   linarith
 
-/-- Refined range theorem: the sum lands in specific ranges.
-    - When input > ct: sum.val ∈ [2^127, 2^128), so testBit 127 = true
-    - When input ≤ ct: sum.val < 2^127, so testBit 127 = false
+set_option maxHeartbeats 400000 in
+/-- Refined range theorem: the sum structure encodes the comparison via bit 127.
+    - When input > ct: sum.val / 2^127 is odd (testBit 127 = true)
+    - When input ≤ ct: sum.val / 2^127 is even (testBit 127 = false)
 
-    This follows from the circuit design:
-    - Let k be the MSB position where signal ≠ constant
-    - If input > ct, signal wins at k, contributing 2^128 - 2^k
-    - The contributions from lower positions cancel appropriately
-    - The key: Σ_{j<k} (2^128 - 2^j) + Σ losses contributes < 2^k to the total
-    - So total is 2^128 - 2^k + (something < 2^k) ∈ [2^128 - 2^k, 2^128)
-    - Since k ≤ 126, we have 2^128 - 2^k ≥ 2^128 - 2^126 > 2^127 -/
+    The key insight: Let W = sum of 2^i for win positions, Λ = sum of 2^i for loss positions.
+    Sum = |wins| * 2^128 + (Λ - W) when Λ ≥ W, or
+    Sum = |wins| * 2^128 - (W - Λ) when W > Λ.
+
+    When input > ct with MSB win at k:
+    - k is in the win set, so W ≥ 2^k
+    - All losses are at positions j < k, so Λ < 2^k
+    - Therefore W > Λ, and sum/2^127 = 2|wins| - 1 (odd)
+
+    When input ≤ ct:
+    - Either all ties (sum = 0, sum/2^127 = 0, even)
+    - Or MSB loss at k: Λ ≥ 2^k, W < 2^k, so Λ > W
+    - Then sum/2^127 = 2|wins| + 0 = 2|wins| (even) -/
 lemma sum_range_precise (ct : ℕ) (h_ct : ct < 2^254)
     (input : Vector (F p) 254)
     (h_bits : ∀ i (_ : i < 254), input[i] = 0 ∨ input[i] = 1)
@@ -665,39 +865,14 @@ lemma sum_range_precise (ct : ℕ) (h_ct : ct < 2^254)
       parts[i] = computePart i.val input[i.val * 2] input[i.val * 2 + 1] ct) :
     let sum := parts.sum
     let input_val := fromBits (input.map ZMod.val)
-    (input_val > ct → sum.val ≥ 2^127 ∧ sum.val < 2^128) ∧
-    (input_val ≤ ct → sum.val < 2^127) := by
+    (input_val > ct → sum.val / 2^127 % 2 = 1) ∧
+    (input_val ≤ ct → sum.val / 2^127 % 2 = 0) := by
   constructor
 
-  -- Case 1: input > ct → sum ∈ [2^127, 2^128)
+  -- Case 1: input > ct → sum.val / 2^127 is odd
   · intro h_gt
     -- Get the MSB win position k
     obtain ⟨k, h_win_k, h_tie_above⟩ := exists_msb_win_position ct h_ct input h_bits h_gt
-
-    -- The sum structure:
-    -- sum = (2^128 - 2^k) [from position k]
-    --     + Σ_{j<k, win} (2^128 - 2^j)
-    --     + Σ_{j<k, lose} 2^j
-    --     + 0 [from ties above k]
-
-    -- Use computePart_characterization to relate parts to comparison outcomes
-    have h_part_k : parts[k].val = 2^128 - 2^k.val := by
-      rw [h_parts k]
-      have := computePart_characterization k.val k.isLt input[k.val * 2] input[k.val * 2 + 1]
-        (h_bits (k.val * 2) (by omega)) (h_bits (k.val * 2 + 1) (by omega)) ct
-      simp only [signalPairValF] at this h_win_k
-      simp only [this, h_win_k, ↓reduceIte]
-
-    -- For positions j > k, parts[j] = 0 (ties)
-    have h_parts_above_zero : ∀ j : Fin 127, j > k → parts[j].val = 0 := by
-      intro j hj
-      rw [h_parts j]
-      have := computePart_characterization j.val j.isLt input[j.val * 2] input[j.val * 2 + 1]
-        (h_bits (j.val * 2) (by omega)) (h_bits (j.val * 2 + 1) (by omega)) ct
-      simp only [signalPairValF] at this
-      have h_tie := h_tie_above j hj
-      simp only [signalPairValF] at h_tie
-      simp only [this, h_tie, lt_irrefl, ↓reduceIte]
 
     -- Each part has bounded value
     have h_parts_bounded : ∀ i : Fin 127, parts[i].val ≤ 2^128 := by
@@ -706,24 +881,282 @@ lemma sum_range_precise (ct : ℕ) (h_ct : ct < 2^254)
       exact computePart_val_bound' i.val i.isLt _ _
         (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
 
-    -- Lower bound: sum ≥ 2^128 - 2^k ≥ 2^128 - 2^126 > 2^127
-    -- Upper bound: sum < 2^128 (from the structure of the coefficients)
+    -- Sum doesn't overflow in the field
+    have hp : p > 2^253 := ‹Fact (p > 2^253)›.elim
+    have h_sum_lt_p : (parts.toList.map ZMod.val).sum < p := by
+      calc (parts.toList.map ZMod.val).sum
+          ≤ parts.toList.length * 2^128 := list_sum_val_bound' (by
+              intro x hx
+              rw [List.mem_iff_getElem] at hx
+              obtain ⟨i, hi, rfl⟩ := hx
+              simp only [Vector.getElem_toList]
+              rw [Vector.length_toList] at hi
+              exact h_parts_bounded ⟨i, hi⟩)
+        _ = 127 * 2^128 := by simp [Vector.length_toList]
+        _ < p := by linarith
 
-    constructor
-    · -- sum.val ≥ 2^127
-      -- Since k ≤ 126, we have 2^128 - 2^k ≥ 2^128 - 2^126 = 3 * 2^126 > 2^127
-      have h_k_bound : k.val ≤ 126 := by omega
-      have h_bCoeff_ge : 2^128 - 2^k.val ≥ 2^127 := by
-        have : 2^k.val ≤ 2^126 := Nat.pow_le_pow_right (by omega) h_k_bound
-        have : 2^128 - 2^126 = 3 * 2^126 := by native_decide
-        have : 3 * 2^126 > 2^127 := by native_decide
+    -- Define win and loss sets
+    let wins := Finset.filter (fun i : Fin 127 =>
+      signalPairValF input[i.val * 2] input[i.val * 2 + 1] > constPairValAt i.val ct) Finset.univ
+    let losses := Finset.filter (fun i : Fin 127 =>
+      signalPairValF input[i.val * 2] input[i.val * 2 + 1] < constPairValAt i.val ct) Finset.univ
+
+    -- k is in wins
+    have hk_in_wins : k ∈ wins := by
+      simp only [wins, Finset.mem_filter, Finset.mem_univ, true_and, signalPairValF]
+      exact h_win_k
+
+    -- All losses are at positions < k
+    have h_losses_lt_k : ∀ j ∈ losses, j < k := by
+      intro j hj
+      by_contra h_ge_k
+      push_neg at h_ge_k
+      rcases h_ge_k.lt_or_eq with h_gt_k | h_eq_k
+      · have h_tie := h_tie_above j h_gt_k
+        simp only [losses, Finset.mem_filter, Finset.mem_univ, true_and, signalPairValF] at hj
+        simp only [signalPairValF] at h_tie
         omega
-      -- The sum includes parts[k] = 2^128 - 2^k ≥ 2^127
-      -- All parts have non-negative val, so sum.val ≥ parts[k].val ≥ 2^127
-      -- sum.val = Σ parts[i].val (since no overflow, < p)
-      have h_sum_bound := sum_parts_bounded' parts (fun i => h_parts_bounded i)
+      · subst h_eq_k
+        simp only [losses, Finset.mem_filter, Finset.mem_univ, true_and, signalPairValF] at hj h_win_k
+        omega
 
-      -- The sum of .val values equals the .val of the sum (no overflow)
+    -- W ≥ 2^k, Λ < 2^k, so W > Λ
+    let W := wins.sum (fun i => 2^i.val)
+    let Λ := losses.sum (fun i => 2^i.val)
+
+    -- Key bounds: W ≥ 2^k (since k is a win), Λ < 2^k (all losses below k)
+    -- These follow from the MSB structure and geometric series sum
+    have hW_ge : W ≥ 2^k.val := by
+      show 2^k.val ≤ W
+      exact Finset.single_le_sum (f := fun i : Fin 127 => 2^i.val)
+        (fun _ _ => Nat.zero_le _) hk_in_wins
+    have hΛ_lt : Λ < 2^k.val := by
+      -- All losses at positions < k, and sum of 2^i for i < k = 2^k - 1 < 2^k
+      -- The geometric series sum gives us: Λ ≤ sum_{i<k} 2^i = 2^k - 1 < 2^k
+      have h_losses_subset : losses ⊆ Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ := by
+        intro j hj
+        simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+        exact h_losses_lt_k j hj
+      have h1 : Λ ≤ (Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ).sum (fun i => 2^i.val) :=
+        Finset.sum_le_sum_of_subset h_losses_subset
+      -- The filtered sum is bounded by 2^k - 1 (geometric series: sum_{i<k} 2^i = 2^k - 1)
+      have h2 : (Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ).sum (fun i => 2^i.val)
+              ≤ 2^k.val - 1 := by
+        -- The sum over filter {i | i.val < k.val} equals sum over Fin k.val = 2^k - 1
+        have h_sum_eq : (Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ).sum (fun i : Fin 127 => 2^i.val)
+            = (Finset.univ : Finset (Fin k.val)).sum (fun i => 2^i.val) := by
+          symm
+          apply Finset.sum_bij (fun (i : Fin k.val) _ => (⟨i.val, Nat.lt_trans i.isLt k.isLt⟩ : Fin 127))
+          · intro i _; simp only [Finset.mem_filter, Finset.mem_univ, true_and]; exact i.isLt
+          · intro _ _ _ _ h; simp only [Fin.mk.injEq] at h; exact Fin.ext h
+          · intro j hj
+            simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hj
+            exact ⟨⟨j.val, hj⟩, Finset.mem_univ _, rfl⟩
+          · intro _ _; rfl
+        rw [h_sum_eq, sum_pow_two_fin]
+      have h3 : 2^k.val - 1 < 2^k.val := Nat.sub_one_lt (Nat.two_pow_pos k.val).ne'
+      exact Nat.lt_of_le_of_lt (Nat.le_trans h1 h2) h3
+    have hW_gt_Λ : W > Λ := Nat.lt_of_lt_of_le hΛ_lt hW_ge
+    have hW_bound : W ≤ 2^127 - 1 := by
+      -- W ≤ sum of all 2^i for i < 127 = 2^127 - 1
+      show W ≤ 2^127 - 1
+      calc W ≤ (Finset.univ : Finset (Fin 127)).sum (fun i => 2^i.val) :=
+              Finset.sum_le_sum_of_subset (fun _ _ => Finset.mem_univ _)
+        _ = 2^127 - 1 := sum_pow_two_fin 127
+    have hW_sub_Λ_bound : W - Λ < 2^127 := Nat.lt_of_le_of_lt (Nat.sub_le W Λ) (Nat.lt_of_le_of_lt hW_bound (by native_decide))
+    have hW_sub_Λ_pos : W - Λ > 0 := Nat.sub_pos_of_lt hW_gt_Λ
+
+    have h_wins_nonempty : wins.Nonempty := ⟨k, hk_in_wins⟩
+    have h_wins_card_pos : 0 < wins.card := Finset.card_pos.mpr h_wins_nonempty
+
+    -- Partition sum into wins + losses (ties contribute 0)
+    have h_sum_partition : (parts.toList.map ZMod.val).sum =
+        wins.card * 2^128 - W + Λ := by
+      -- Convert list sum to finset sum
+      have h_sum_eq : (parts.toList.map ZMod.val).sum =
+          (Finset.univ : Finset (Fin 127)).sum (fun i => parts[i].val) := by
+        trans (List.ofFn (fun i : Fin 127 => parts[i].val)).sum
+        · congr 1
+          apply List.ext_getElem
+          · rw [List.length_map, Vector.length_toList, List.length_ofFn]
+          · intro i h1 h2
+            rw [List.length_map, Vector.length_toList] at h1
+            simp only [List.getElem_map, Vector.getElem_toList, List.getElem_ofFn]
+            rfl
+        · simp only [List.sum_ofFn]
+      rw [h_sum_eq]
+
+      let ties := Finset.filter (fun i : Fin 127 =>
+        signalPairValF input[i.val * 2] input[i.val * 2 + 1] = constPairValAt i.val ct) Finset.univ
+
+      have h_disjoint_wl : Disjoint wins losses := by
+        simp only [wins, losses, Finset.disjoint_filter]; intro i _ h1 h2; omega
+      have h_disjoint_wt : Disjoint wins ties := by
+        simp only [wins, ties, Finset.disjoint_filter]; intro i _ h1 h2; omega
+      have h_disjoint_lt : Disjoint losses ties := by
+        simp only [losses, ties, Finset.disjoint_filter]; intro i _ h1 h2; omega
+
+      have h_union : wins ∪ losses ∪ ties = Finset.univ := by
+        ext i; simp only [Finset.mem_union, wins, losses, ties, Finset.mem_filter,
+                          Finset.mem_univ, true_and, iff_true]; omega
+
+      have h_ties_zero : ties.sum (fun i => parts[i].val) = 0 := by
+        apply Finset.sum_eq_zero
+        intro i hi
+        simp only [ties, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+        rw [h_parts i]
+        have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+          (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+        simp only [signalPairValF] at this hi
+        simp only [this, hi, lt_irrefl, ↓reduceIte]
+
+      have h_wins_val : wins.sum (fun i => parts[i].val) = wins.card * 2^128 - W := by
+        have h_eq : wins.sum (fun i => parts[i].val) = wins.sum (fun i => 2^128 - 2^i.val) := by
+          apply Finset.sum_congr rfl
+          intro i hi
+          simp only [wins, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+          rw [h_parts i]
+          have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+            (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+          simp only [signalPairValF] at this hi
+          simp only [this, hi, ↓reduceIte]
+        rw [h_eq]
+        -- For ℕ, sum of (a - b) = sum of a - sum of b when a ≥ b for each term
+        -- Prove sum of (2^128 - 2^i) = card * 2^128 - sum of 2^i
+        have h_sum_sub : ∀ (t : Finset (Fin 127)),
+            t.sum (fun i => 2^128 - 2^i.val) = t.card * 2^128 - t.sum (fun i => 2^i.val) := by
+          intro t
+          induction t using Finset.induction with
+          | empty => simp
+          | @insert a s ha ih =>
+            have h_a_ge : 2^a.val ≤ 2^128 :=
+              Nat.pow_le_pow_right (by omega) (Nat.le_of_lt (Nat.lt_trans a.isLt (by omega : 127 < 128)))
+            have h_s_ge : ∀ i ∈ s, 2^i.val ≤ 2^128 := fun i _ =>
+              Nat.pow_le_pow_right (by omega) (Nat.le_of_lt (Nat.lt_trans i.isLt (by omega : 127 < 128)))
+            simp only [Finset.sum_insert ha, Finset.card_insert_of_notMem ha]
+            rw [ih]
+            have h_sum_le : s.sum (fun i => 2^i.val) ≤ s.card * 2^128 := by
+              calc s.sum (fun i => 2^i.val)
+                  ≤ s.sum (fun _ => 2^128) := Finset.sum_le_sum (fun i hi => h_s_ge i hi)
+                _ = s.card * 2^128 := by simp [Finset.sum_const, smul_eq_mul]
+            -- Goal: 2^128 - 2^a + (s.card * 2^128 - sum) = (s.card + 1) * 2^128 - (2^a + sum)
+            omega
+        rw [h_sum_sub wins]
+
+      have h_losses_val : losses.sum (fun i => parts[i].val) = Λ := by
+        simp only [Λ]
+        apply Finset.sum_congr rfl
+        intro i hi
+        simp only [losses, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+        rw [h_parts i]
+        have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+          (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+        simp only [signalPairValF] at this hi
+        have h_not_gt : ¬(input[i.val * 2 + 1].val * 2 + input[i.val * 2].val >
+                          constPairValAt i.val ct) := by omega
+        have h_not_eq : ¬(input[i.val * 2 + 1].val * 2 + input[i.val * 2].val =
+                          constPairValAt i.val ct) := by omega
+        simp only [this, h_not_gt, h_not_eq, ↓reduceIte]
+
+      calc (Finset.univ : Finset (Fin 127)).sum (fun i => parts[i].val)
+          = (wins ∪ losses ∪ ties).sum (fun i => parts[i].val) := by rw [h_union]
+        _ = (wins ∪ losses).sum (fun i => parts[i].val) + ties.sum (fun i => parts[i].val) := by
+            have h_wl_t_disj : Disjoint (wins ∪ losses) ties := by
+              rw [Finset.disjoint_union_left]; exact ⟨h_disjoint_wt, h_disjoint_lt⟩
+            exact Finset.sum_union h_wl_t_disj
+        _ = wins.sum (fun i => parts[i].val) + losses.sum (fun i => parts[i].val) +
+            ties.sum (fun i => parts[i].val) := by
+            rw [Finset.sum_union h_disjoint_wl]
+        _ = wins.sum (fun i => parts[i].val) + losses.sum (fun i => parts[i].val) := by
+            rw [h_ties_zero]; ring
+        _ = wins.card * 2^128 - W + Λ := by rw [h_wins_val, h_losses_val]
+
+    rw [vector_sum_eq_list_sum', list_sum_val_eq' h_sum_lt_p, h_sum_partition]
+
+    -- (n * 2^128 - W + Λ) / 2^127 = 2n - 1 when W > Λ
+    have h_n_pos : wins.card ≥ 1 := h_wins_card_pos
+    have h_key : (wins.card * 2^128 - W + Λ) / 2^127 = 2 * wins.card - 1 := by
+      -- We have W > Λ, so wins.card * 2^128 - W + Λ = wins.card * 2^128 - (W - Λ)
+      have h_W_ge_Λ : W ≥ Λ := Nat.le_of_lt hW_gt_Λ
+      have h_rearrange : wins.card * 2^128 - W + Λ = wins.card * 2^128 - (W - Λ) := by
+        have : W - Λ + Λ = W := Nat.sub_add_cancel h_W_ge_Λ
+        have h_W_le : W ≤ wins.card * 2^128 := by
+          have h_W_lt : W < 2^127 := Nat.lt_of_le_of_lt hW_bound (Nat.sub_one_lt (Nat.two_pow_pos 127).ne')
+          have h1 : (2 : ℕ)^127 ≤ 1 * 2^128 := by
+            calc (2 : ℕ)^127 ≤ 2^128 := Nat.pow_le_pow_right (by omega) (by omega)
+              _ = 1 * 2^128 := by ring
+          have h2 : 1 * 2^128 ≤ wins.card * 2^128 := Nat.mul_le_mul_right _ h_n_pos
+          have h3 : W < wins.card * 2^128 := calc W < 2^127 := h_W_lt
+            _ ≤ 1 * 2^128 := h1
+            _ ≤ wins.card * 2^128 := h2
+          exact Nat.le_of_lt h3
+        omega
+      rw [h_rearrange]
+      -- Now show: (wins.card * 2^128 - (W - Λ)) / 2^127 = 2 * wins.card - 1
+      -- Since 0 < W - Λ < 2^127, we have:
+      -- wins.card * 2^128 - (W - Λ) = (2*wins.card - 1) * 2^127 + (2^127 - (W - Λ))
+      have h_WΛ_pos : W - Λ > 0 := hW_sub_Λ_pos
+      have h_WΛ_bound : W - Λ < 2^127 := hW_sub_Λ_bound
+      have h_expand : wins.card * 2^128 - (W - Λ) = (2 * wins.card - 1) * 2^127 + (2^127 - (W - Λ)) := by
+        have h1 : wins.card * 2^128 = 2 * wins.card * 2^127 := by ring
+        have h2 : 2 * wins.card * 2^127 = (2 * wins.card - 1) * 2^127 + 2^127 := by
+          have : 2 * wins.card - 1 + 1 = 2 * wins.card := Nat.sub_add_cancel (by omega : 2 * wins.card ≥ 1)
+          calc 2 * wins.card * 2^127 = (2 * wins.card - 1 + 1) * 2^127 := by rw [this]
+            _ = (2 * wins.card - 1) * 2^127 + 1 * 2^127 := by ring
+            _ = (2 * wins.card - 1) * 2^127 + 2^127 := by ring
+        calc wins.card * 2^128 - (W - Λ) = 2 * wins.card * 2^127 - (W - Λ) := by rw [h1]
+          _ = (2 * wins.card - 1) * 2^127 + 2^127 - (W - Λ) := by rw [h2]
+          _ = (2 * wins.card - 1) * 2^127 + (2^127 - (W - Λ)) := by omega
+      rw [h_expand]
+      have h_remainder_lt : 2^127 - (W - Λ) < 2^127 := Nat.sub_lt (Nat.two_pow_pos 127) h_WΛ_pos
+      -- (q * d + r) / d = q when r < d
+      have h_div : ((2 * wins.card - 1) * 2^127 + (2^127 - (W - Λ))) / 2^127 = 2 * wins.card - 1 := by
+        rw [Nat.add_comm]
+        rw [Nat.add_mul_div_right _ _ (Nat.two_pow_pos 127)]
+        rw [Nat.div_eq_of_lt h_remainder_lt]
+        simp
+      exact h_div
+
+    rw [h_key]
+    -- Goal: (2 * wins.card - 1) % 2 = 1
+    have : 2 * wins.card - 1 = 2 * (wins.card - 1) + 1 := by omega
+    rw [this]
+    simp only [Nat.add_mod, Nat.mul_mod_right, Nat.zero_add, Nat.one_mod]
+
+  -- Case 2: input ≤ ct → sum.val / 2^127 is even
+  · intro h_le
+    obtain h_all_tie | ⟨k, h_lose_k, h_tie_above⟩ := msb_determines_le ct h_ct input h_bits h_le
+
+    -- Subcase: all ties → sum = 0
+    · have h_all_zero : ∀ i : Fin 127, parts[i].val = 0 := by
+        intro i
+        rw [h_parts i]
+        have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+          (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+        simp only [signalPairValF] at this
+        have h_tie := h_all_tie i
+        simp only [signalPairValF] at h_tie
+        simp only [this, h_tie, lt_irrefl, ↓reduceIte]
+      have h_sum_zero : parts.sum = 0 := by
+        rw [vector_sum_eq_list_sum']
+        apply List.sum_eq_zero
+        intro x hx
+        rw [List.mem_iff_getElem] at hx
+        obtain ⟨i, hi, rfl⟩ := hx
+        simp only [Vector.getElem_toList]
+        rw [Vector.length_toList] at hi
+        have := h_all_zero ⟨i, hi⟩
+        simp only [ZMod.val_eq_zero] at this
+        exact this
+      simp only [h_sum_zero, ZMod.val_zero, Nat.zero_div, Nat.zero_mod]
+
+    -- Subcase: MSB loss at position k
+    · have h_parts_bounded : ∀ i : Fin 127, parts[i].val ≤ 2^128 := by
+        intro i
+        rw [h_parts i]
+        exact computePart_val_bound' i.val i.isLt _ _
+          (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+
       have hp : p > 2^253 := ‹Fact (p > 2^253)›.elim
       have h_sum_lt_p : (parts.toList.map ZMod.val).sum < p := by
         calc (parts.toList.map ZMod.val).sum
@@ -737,100 +1170,213 @@ lemma sum_range_precise (ct : ℕ) (h_ct : ct < 2^254)
           _ = 127 * 2^128 := by simp [Vector.length_toList]
           _ < p := by linarith
 
-      rw [vector_sum_eq_list_sum', list_sum_val_eq' h_sum_lt_p]
+      let wins := Finset.filter (fun i : Fin 127 =>
+        signalPairValF input[i.val * 2] input[i.val * 2 + 1] > constPairValAt i.val ct) Finset.univ
+      let losses := Finset.filter (fun i : Fin 127 =>
+        signalPairValF input[i.val * 2] input[i.val * 2 + 1] < constPairValAt i.val ct) Finset.univ
 
-      -- The sum of vals includes parts[k].val = 2^128 - 2^k ≥ 2^127
-      have h_k_in : parts[k] ∈ parts.toList := by
-        rw [List.mem_iff_getElem]
-        exact ⟨k.val, by simp [Vector.length_toList], by simp [Vector.getElem_toList]⟩
-      have h_val_k_in : parts[k].val ∈ parts.toList.map ZMod.val := by
-        apply List.mem_map.mpr
-        exact ⟨parts[k], h_k_in, rfl⟩
-      have h_ge_k : (parts.toList.map ZMod.val).sum ≥ parts[k].val := by
-        exact List.single_le_sum (by intro _ _; omega) _ h_val_k_in
-      calc (parts.toList.map ZMod.val).sum ≥ parts[k].val := h_ge_k
-        _ = 2^128 - 2^k.val := h_part_k
-        _ ≥ 2^127 := h_bCoeff_ge
-    · -- sum.val < 2^128
-      -- The sum is bounded by the structure: each position contributes ≤ 2^128
-      -- But more precisely, wins contribute 2^128 - 2^i, ties 0, losses 2^i
-      -- The key: after the MSB win at k, positions above contribute 0
-      -- And contributions from below k sum to < 2^k
+      have hk_in_losses : k ∈ losses := by
+        simp only [losses, Finset.mem_filter, Finset.mem_univ, true_and, signalPairValF]
+        exact h_lose_k
 
-      -- The proper proof requires showing the CompConstant structure:
-      -- When there's a win at MSB position k:
-      -- - Position k: 2^128 - 2^k
-      -- - Positions j < k: contributions that sum to at most 2^k - 1 (modular structure)
-      -- - Total: (2^128 - 2^k) + (at most 2^k - 1) = 2^128 - 1 < 2^128
-
-      -- This is a known property of the circomlib CompConstant circuit
-      -- but requires careful analysis of all contribution patterns
-      sorry
-
-  -- Case 2: input ≤ ct → sum < 2^127
-  · intro h_le
-    -- Either all ties (sum = 0) or MSB differing position is a loss
-    obtain h_all_tie | ⟨k, h_lose_k, h_tie_above⟩ := msb_determines_le ct h_ct input h_bits h_le
-
-    -- Subcase: all ties → sum = 0
-    · have h_all_zero : ∀ i : Fin 127, parts[i].val = 0 := by
-        intro i
-        rw [h_parts i]
-        have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
-          (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
-        simp only [signalPairValF] at this
-        have h_tie := h_all_tie i
-        simp only [signalPairValF] at h_tie
-        simp only [this, h_tie, lt_irrefl, ↓reduceIte]
-      -- sum = 0, so sum.val = 0 < 2^127
-      have h_sum_zero : parts.sum = 0 := by
-        rw [vector_sum_eq_list_sum']
-        apply List.sum_eq_zero
-        intro x hx
-        rw [List.mem_iff_getElem] at hx
-        obtain ⟨i, hi, rfl⟩ := hx
-        simp only [Vector.getElem_toList]
-        rw [Vector.length_toList] at hi
-        have := h_all_zero ⟨i, hi⟩
-        simp only [ZMod.val_eq_zero] at this
-        exact this
-      simp only [h_sum_zero, ZMod.val_zero]
-      exact Nat.two_pow_pos 127
-
-    -- Subcase: MSB loss at position k
-    · -- sum = 2^k [from position k]
-      --     + Σ_{j<k, win} (2^128 - 2^j)
-      --     + Σ_{j<k, lose} 2^j
-      -- The lower contributions are bounded: sum < 2^(k+1) ≤ 2^127
-      have h_k_bound : k.val ≤ 126 := by omega
-
-      have h_part_k : parts[k].val = 2^k.val := by
-        rw [h_parts k]
-        have := computePart_characterization k.val k.isLt input[k.val * 2] input[k.val * 2 + 1]
-          (h_bits (k.val * 2) (by omega)) (h_bits (k.val * 2 + 1) (by omega)) ct
-        simp only [signalPairValF] at this h_lose_k
-        have h_not_gt : ¬(input[k.val * 2 + 1].val * 2 + input[k.val * 2].val >
-                          constPairValAt k.val ct) := by omega
-        have h_not_eq : ¬(input[k.val * 2 + 1].val * 2 + input[k.val * 2].val =
-                          constPairValAt k.val ct) := by omega
-        simp only [this, h_not_gt, h_not_eq, ↓reduceIte]
-
-      -- Positions above k contribute 0
-      have h_parts_above_zero : ∀ j : Fin 127, j > k → parts[j].val = 0 := by
+      have h_wins_lt_k : ∀ j ∈ wins, j < k := by
         intro j hj
-        rw [h_parts j]
-        have := computePart_characterization j.val j.isLt input[j.val * 2] input[j.val * 2 + 1]
-          (h_bits (j.val * 2) (by omega)) (h_bits (j.val * 2 + 1) (by omega)) ct
-        simp only [signalPairValF] at this
-        have h_tie := h_tie_above j hj
-        simp only [signalPairValF] at h_tie
-        simp only [this, h_tie, lt_irrefl, ↓reduceIte]
+        by_contra h_ge_k
+        push_neg at h_ge_k
+        rcases h_ge_k.lt_or_eq with h_gt_k | h_eq_k
+        · have h_tie := h_tie_above j h_gt_k
+          simp only [wins, Finset.mem_filter, Finset.mem_univ, true_and, signalPairValF] at hj
+          simp only [signalPairValF] at h_tie
+          omega
+        · subst h_eq_k
+          simp only [wins, Finset.mem_filter, Finset.mem_univ, true_and, signalPairValF] at hj h_lose_k
+          omega
 
-      -- sum < 2^k + 2^k = 2^(k+1) ≤ 2^127
-      -- The proper proof requires showing that contributions from positions j < k
-      -- sum to less than 2^k, so total sum < 2^k + (2^k - 1) < 2^(k+1) ≤ 2^127
-      -- This is the symmetric property to the input > ct case
-      sorry
+      let W := wins.sum (fun i => 2^i.val)
+      let Λ := losses.sum (fun i => 2^i.val)
+
+      have hW_lt : W < 2^k.val := by
+        have h_wins_subset : wins ⊆ Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ := by
+          intro j hj
+          simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+          exact h_wins_lt_k j hj
+        have h1 : W ≤ (Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ).sum (fun i => 2^i.val) :=
+          Finset.sum_le_sum_of_subset h_wins_subset
+        -- Use the same bijection proof as in Case 1
+        have h_sum_eq : (Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ).sum (fun i : Fin 127 => 2^i.val)
+            = (Finset.univ : Finset (Fin k.val)).sum (fun i => 2^i.val) := by
+          symm
+          apply Finset.sum_bij (fun (i : Fin k.val) _ => (⟨i.val, Nat.lt_trans i.isLt k.isLt⟩ : Fin 127))
+          · intro i _; simp only [Finset.mem_filter, Finset.mem_univ, true_and]; exact i.isLt
+          · intro _ _ _ _ h; simp only [Fin.mk.injEq] at h; exact Fin.ext h
+          · intro j hj
+            simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hj
+            exact ⟨⟨j.val, hj⟩, Finset.mem_univ _, rfl⟩
+          · intro _ _; rfl
+        have h2 : (Finset.filter (fun i : Fin 127 => i.val < k.val) Finset.univ).sum (fun i => 2^i.val)
+                ≤ 2^k.val - 1 := by rw [h_sum_eq, sum_pow_two_fin]
+        have h3 : 2^k.val - 1 < 2^k.val := Nat.sub_one_lt (Nat.two_pow_pos k.val).ne'
+        exact Nat.lt_of_le_of_lt (Nat.le_trans h1 h2) h3
+
+      have hΛ_ge : Λ ≥ 2^k.val := by
+        show 2^k.val ≤ Λ
+        exact Finset.single_le_sum (f := fun i : Fin 127 => 2^i.val)
+          (fun _ _ => Nat.zero_le _) hk_in_losses
+
+      have hW_lt_Λ : W < Λ := by omega
+
+      have hΛ_bound : Λ ≤ 2^127 - 1 := by
+        calc Λ ≤ (Finset.univ : Finset (Fin 127)).sum (fun i => 2^i.val) :=
+                Finset.sum_le_sum_of_subset (by intro _ _; exact Finset.mem_univ _)
+          _ = 2^127 - 1 := sum_pow_two_fin 127
+
+      -- Partition sum
+      have h_sum_partition : (parts.toList.map ZMod.val).sum =
+          wins.card * 2^128 - W + Λ := by
+        -- Convert list sum to finset sum
+        have h_sum_eq : (parts.toList.map ZMod.val).sum =
+            (Finset.univ : Finset (Fin 127)).sum (fun i => parts[i].val) := by
+          trans (List.ofFn (fun i : Fin 127 => parts[i].val)).sum
+          · congr 1
+            apply List.ext_getElem
+            · rw [List.length_map, Vector.length_toList, List.length_ofFn]
+            · intro i h1 h2
+              rw [List.length_map, Vector.length_toList] at h1
+              simp only [List.getElem_map, Vector.getElem_toList, List.getElem_ofFn]
+              rfl
+          · simp only [List.sum_ofFn]
+        rw [h_sum_eq]
+
+        let ties := Finset.filter (fun i : Fin 127 =>
+          signalPairValF input[i.val * 2] input[i.val * 2 + 1] = constPairValAt i.val ct) Finset.univ
+
+        have h_disjoint_wl : Disjoint wins losses := by
+          simp only [wins, losses, Finset.disjoint_filter]; intro i _ h1 h2; omega
+        have h_disjoint_wt : Disjoint wins ties := by
+          simp only [wins, ties, Finset.disjoint_filter]; intro i _ h1 h2; omega
+        have h_disjoint_lt : Disjoint losses ties := by
+          simp only [losses, ties, Finset.disjoint_filter]; intro i _ h1 h2; omega
+
+        have h_union : wins ∪ losses ∪ ties = Finset.univ := by
+          ext i; simp only [Finset.mem_union, wins, losses, ties, Finset.mem_filter,
+                            Finset.mem_univ, true_and, iff_true]; omega
+
+        have h_ties_zero : ties.sum (fun i => parts[i].val) = 0 := by
+          apply Finset.sum_eq_zero
+          intro i hi
+          simp only [ties, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+          rw [h_parts i]
+          have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+            (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+          simp only [signalPairValF] at this hi
+          simp only [this, hi, lt_irrefl, ↓reduceIte]
+
+        have h_wins_val : wins.sum (fun i => parts[i].val) = wins.card * 2^128 - W := by
+          have h_eq : wins.sum (fun i => parts[i].val) = wins.sum (fun i => 2^128 - 2^i.val) := by
+            apply Finset.sum_congr rfl
+            intro i hi
+            simp only [wins, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+            rw [h_parts i]
+            have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+              (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+            simp only [signalPairValF] at this hi
+            simp only [this, hi, ↓reduceIte]
+          rw [h_eq]
+          -- For ℕ, sum of (a - b) = sum of a - sum of b when a ≥ b for each term
+          -- Prove sum of (2^128 - 2^i) = card * 2^128 - sum of 2^i
+          have h_sum_sub : ∀ (t : Finset (Fin 127)),
+              t.sum (fun i => 2^128 - 2^i.val) = t.card * 2^128 - t.sum (fun i => 2^i.val) := by
+            intro t
+            induction t using Finset.induction with
+            | empty => simp
+            | @insert a s ha ih =>
+              have h_a_ge : 2^a.val ≤ 2^128 :=
+                Nat.pow_le_pow_right (by omega) (Nat.le_of_lt (Nat.lt_trans a.isLt (by omega : 127 < 128)))
+              have h_s_ge : ∀ i ∈ s, 2^i.val ≤ 2^128 := fun i _ =>
+                Nat.pow_le_pow_right (by omega) (Nat.le_of_lt (Nat.lt_trans i.isLt (by omega : 127 < 128)))
+              simp only [Finset.sum_insert ha, Finset.card_insert_of_notMem ha]
+              rw [ih]
+              have h_sum_le : s.sum (fun i => 2^i.val) ≤ s.card * 2^128 := by
+                calc s.sum (fun i => 2^i.val)
+                    ≤ s.sum (fun _ => 2^128) := Finset.sum_le_sum (fun i hi => h_s_ge i hi)
+                  _ = s.card * 2^128 := by simp [Finset.sum_const, smul_eq_mul]
+              -- Goal: 2^128 - 2^a + (s.card * 2^128 - sum) = (s.card + 1) * 2^128 - (2^a + sum)
+              omega
+          rw [h_sum_sub wins]
+
+        have h_losses_val : losses.sum (fun i => parts[i].val) = Λ := by
+          simp only [Λ]
+          apply Finset.sum_congr rfl
+          intro i hi
+          simp only [losses, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+          rw [h_parts i]
+          have := computePart_characterization i.val i.isLt input[i.val * 2] input[i.val * 2 + 1]
+            (h_bits (i.val * 2) (by omega)) (h_bits (i.val * 2 + 1) (by omega)) ct
+          simp only [signalPairValF] at this hi
+          have h_not_gt : ¬(input[i.val * 2 + 1].val * 2 + input[i.val * 2].val >
+                            constPairValAt i.val ct) := by omega
+          have h_not_eq : ¬(input[i.val * 2 + 1].val * 2 + input[i.val * 2].val =
+                            constPairValAt i.val ct) := by omega
+          simp only [this, h_not_gt, h_not_eq, ↓reduceIte]
+
+        calc (Finset.univ : Finset (Fin 127)).sum (fun i => parts[i].val)
+            = (wins ∪ losses ∪ ties).sum (fun i => parts[i].val) := by rw [h_union]
+          _ = (wins ∪ losses).sum (fun i => parts[i].val) + ties.sum (fun i => parts[i].val) := by
+              have h_wl_t_disj : Disjoint (wins ∪ losses) ties := by
+                rw [Finset.disjoint_union_left]; exact ⟨h_disjoint_wt, h_disjoint_lt⟩
+              exact Finset.sum_union h_wl_t_disj
+          _ = wins.sum (fun i => parts[i].val) + losses.sum (fun i => parts[i].val) +
+              ties.sum (fun i => parts[i].val) := by
+              rw [Finset.sum_union h_disjoint_wl]
+          _ = wins.sum (fun i => parts[i].val) + losses.sum (fun i => parts[i].val) := by
+              rw [h_ties_zero]; ring
+          _ = wins.card * 2^128 - W + Λ := by rw [h_wins_val, h_losses_val]
+
+      rw [vector_sum_eq_list_sum', list_sum_val_eq' h_sum_lt_p, h_sum_partition]
+
+      -- (n * 2^128 - W + Λ) / 2^127 = 2n when Λ > W and Λ - W < 2^127
+      have h_Λ_W_bound : Λ - W < 2^127 := by omega
+
+      -- Need to show W ≤ wins.card * 2^128 for rearrangement
+      -- W ≤ 2^127 - 1 < 2^128, so if wins.card = 0 then we need wins.card * 2^128 = 0
+      -- But then W ≤ 0 which is W = 0
+      have hW_bound : W ≤ 2^127 - 1 := by
+        calc W ≤ (Finset.univ : Finset (Fin 127)).sum (fun i => 2^i.val) :=
+              Finset.sum_le_sum_of_subset (by intro _ _; exact Finset.mem_univ _)
+          _ = 2^127 - 1 := sum_pow_two_fin 127
+
+      have h_key : (wins.card * 2^128 - W + Λ) / 2^127 = 2 * wins.card := by
+        -- Since Λ > W, we have wins.card * 2^128 - W + Λ = wins.card * 2^128 + (Λ - W)
+        -- if W ≤ wins.card * 2^128
+        by_cases h_wins_zero : wins.card = 0
+        · -- If wins.card = 0, then W = 0 (sum over empty set)
+          have h_wins_empty : wins = ∅ := Finset.card_eq_zero.mp h_wins_zero
+          have hW_zero : W = 0 := by simp only [W, h_wins_empty, Finset.sum_empty]
+          simp only [h_wins_zero, hW_zero, Nat.zero_mul, Nat.zero_sub, Nat.zero_add]
+          -- Need to show Λ / 2^127 = 0, i.e., Λ < 2^127
+          have hΛ_lt : Λ < 2^127 := by omega
+          rw [Nat.div_eq_of_lt hΛ_lt]
+        · -- wins.card ≥ 1
+          have h_wins_pos : wins.card ≥ 1 := Nat.one_le_iff_ne_zero.mpr h_wins_zero
+          have h_W_le : W ≤ wins.card * 2^128 := by
+            have h1 : W ≤ 2^127 - 1 := hW_bound
+            have h2 : (2 : ℕ)^127 - 1 < 2^128 := by
+              calc (2 : ℕ)^127 - 1 < 2^127 := Nat.sub_one_lt (Nat.two_pow_pos 127).ne'
+                _ ≤ 2^128 := Nat.pow_le_pow_right (by omega) (by omega)
+            have h3 : (1 : ℕ) * 2^128 ≤ wins.card * 2^128 := Nat.mul_le_mul_right _ h_wins_pos
+            omega
+          have h_rearrange : wins.card * 2^128 - W + Λ = wins.card * 2^128 + (Λ - W) := by
+            omega
+          rw [h_rearrange]
+          have h_expand : wins.card * 2^128 + (Λ - W) = 2 * wins.card * 2^127 + (Λ - W) := by ring
+          rw [h_expand]
+          apply Nat.div_eq_of_lt_le
+          · omega
+          · calc 2 * wins.card * 2^127 + (Λ - W) < 2 * wins.card * 2^127 + 2^127 := by omega
+              _ = (2 * wins.card + 1) * 2^127 := by ring
+
+      rw [h_key]
+      omega
 
 /-! ## Core Mathematical Lemmas -/
 
@@ -938,6 +1484,7 @@ lemma signalPairVal_le_3 (i : ℕ) (hi : i < 127) (input : Vector (F p) 254)
   · simp only [h1_l, h0_m, ZMod.val_zero, @ZMod.val_one p ⟨hp_gt_1⟩]; omega
   · simp only [h1_l, h1_m, @ZMod.val_one p ⟨hp_gt_1⟩]; omega
 
+omit [Fact (p < 2 ^ 254)] in
 /-- computePart value is bounded by 2^128 when inputs are boolean and i < 127.
     This is the key bound needed for sum_parts_bounded. -/
 lemma computePart_val_bound (i : ℕ) (hi : i < 127) (slsb smsb : F p)
@@ -972,7 +1519,7 @@ lemma sum_bit127_encodes_gt (ct : ℕ) (h_ct : ct < 2^254)
     sum.val.testBit 127 = (input_val > ct) := by
   simp only
 
-  -- Get the precise range bounds from sum_range_precise
+  -- Get the parity of sum.val / 2^127 from sum_range_precise
   have h_range := sum_range_precise ct h_ct input h_bits parts h_parts
   simp only at h_range
   obtain ⟨h_gt_range, h_le_range⟩ := h_range
@@ -983,28 +1530,25 @@ lemma sum_bit127_encodes_gt (ct : ℕ) (h_ct : ct < 2^254)
   -- Case: input > ct, need testBit 127 = true
   case pos =>
     simp only [h_cmp]
-    -- From h_gt_range: sum.val ∈ [2^127, 2^128)
-    obtain ⟨h_ge, h_lt⟩ := h_gt_range h_cmp
-    -- When n ∈ [2^127, 2^128), testBit 127 = true because:
-    -- n / 2^127 = 1, so (n / 2^127) % 2 = 1
-    have h_div : parts.sum.val / 2^127 = 1 := by
-      apply Nat.div_eq_of_lt_le
-      · simpa using h_ge
-      · have : parts.sum.val < 2^128 := h_lt
-        have : 2^128 = 2 * 2^127 := by ring
-        omega
-    simp only [Nat.testBit, Nat.shiftRight_eq_div_pow, h_div, Nat.and_one_is_mod]
-    native_decide
+    -- From h_gt_range: sum.val / 2^127 % 2 = 1 (odd)
+    have h_odd := h_gt_range h_cmp
+    -- testBit 127 = (1 &&& (sum / 2^127) ≠ 0)
+    simp only [Nat.testBit, Nat.shiftRight_eq_div_pow]
+    -- Goal: (1 &&& (parts.sum.val / 2^127) ≠ 0) = true
+    -- Since (1 &&& x) = x % 2, and h_odd says x % 2 = 1
+    rw [Nat.one_and_eq_mod_two, h_odd]
+    decide
 
   -- Case: input ≤ ct, need testBit 127 = false
   case neg =>
     push_neg at h_cmp
-    -- From h_le_range: sum.val < 2^127
-    have h_lt := h_le_range h_cmp
-    -- When n < 2^k, testBit k = false
-    have h_tb : parts.sum.val.testBit 127 = false := Nat.testBit_eq_false_of_lt h_lt
-    rw [h_tb]
-    simp only [not_lt.mpr h_cmp, Bool.false_eq_true]
+    -- From h_le_range: sum.val / 2^127 % 2 = 0 (even)
+    have h_even := h_le_range h_cmp
+    -- testBit 127 = (1 &&& (sum / 2^127) ≠ 0)
+    simp only [Nat.testBit, Nat.shiftRight_eq_div_pow, not_lt.mpr h_cmp]
+    -- Goal: (1 &&& (parts.sum.val / 2^127) ≠ 0) = false
+    rw [Nat.one_and_eq_mod_two, h_even]
+    decide
 
 omit [Fact (p < 2 ^ 254)] [Fact (p > 2 ^ 253)] in
 /-- Lemma 3: fieldToBits correctly represents bit 127 -/
@@ -1012,6 +1556,27 @@ lemma fieldToBits_testBit_127 (x : F p) (n : ℕ) (hn : 127 < n) :
     (fieldToBits n x)[127] = if x.val.testBit 127 then 1 else 0 := by
   simp only [fieldToBits, toBits, Vector.getElem_map, Vector.getElem_mapRange]
   split_ifs <;> simp_all
+
+omit [Fact (p < 2 ^ 254)] [Fact (p > 2 ^ 253)] in
+/-- Helper: Expression.eval distributes over List.sum -/
+lemma list_sum_map_eval (env : Environment (F p)) (l : List (Expression (F p))) :
+    (l.map (Expression.eval env)).sum = Expression.eval env l.sum := by
+  induction l with
+  | nil => simp only [List.map_nil, List.sum_nil, circuit_norm]
+  | cons x xs ih =>
+    simp only [List.map_cons, List.sum_cons]
+    rw [ih]
+    simp only [circuit_norm]
+
+omit [Fact (p < 2 ^ 254)] [Fact (p > 2 ^ 253)] in
+/-- Helper: Expression.eval distributes over Vector.sum -/
+lemma vector_sum_map_eval (env : Environment (F p)) (n : ℕ) (i₀ : ℕ) :
+    (Vector.map (Expression.eval env) (Vector.mapRange n fun i => var { index := i₀ + i })).sum =
+    Expression.eval env (Vector.mapRange n fun i => var { index := i₀ + i }).sum := by
+  simp only [Vector.sum, Vector.toArray_map]
+  conv_lhs => rw [← Array.sum_eq_sum_toList, Array.toList_map]
+  conv_rhs => rw [← Array.sum_eq_sum_toList]
+  exact list_sum_map_eval env _
 
 /-! ## Main Circuit -/
 
@@ -1099,6 +1664,7 @@ def main (ct : ℕ) (input : Vector (Expression (F p)) 254) := do
 
 /-! ## Formal Circuit Definition -/
 
+set_option maxHeartbeats 3200000 in
 def circuit (c : ℕ) : FormalCircuit (F p) (fields 254) field where
   main := main c
   localLength _ := 127 + 1 + 135 + 1
@@ -1114,35 +1680,154 @@ def circuit (c : ℕ) : FormalCircuit (F p) (fields 254) field where
     output = if fromBits (input.map ZMod.val) > c then 1 else 0
 
   soundness := by
-    /-
-    Proof structure:
-    1. Extract constraints from h_holds
-    2. Show parts are computed correctly from input
-    3. Show sout = sum of parts
-    4. Use Num2Bits spec to get bits = fieldToBits 135 sout
-    5. Show bits[127] encodes the comparison result
-    6. Conclude output = if input > c then 1 else 0
-    -/
-    circuit_proof_start [main, Num2Bits.circuit]
+    circuit_proof_start [Num2Bits.circuit]
+    rcases h_assumptions with ⟨h_bits, h_ct⟩
+    rcases h_holds with ⟨h_parts, h_holds⟩
+    rcases h_holds with ⟨h_sout, h_holds⟩
+    rcases h_holds with ⟨h_num2bits, h_out⟩
+    rcases h_num2bits with ⟨h_sout_range, h_bits_valid⟩
 
-    -- Extract assumptions
-    obtain ⟨h_bits_bool, h_c_bound⟩ := h_assumptions
+    -- Define local names for circuit values
+    let parts : Vector (F p) 127 := Vector.mapRange 127 fun i => env.get (i₀ + i)
+    let sout : F p := env.get (i₀ + 127)
+    let bits : Vector (F p) 135 := Vector.mapRange 135 fun i => env.get (i₀ + 127 + 1 + i)
+    let out : F p := env.get (i₀ + 127 + 1 + 135)
+    let input_val : ℕ := fromBits (input.map ZMod.val)
 
-    -- h_input tells us how input relates to input_var
-    have h_input_eval : ∀ i : Fin 254, input_var[i].eval env = input[i] := by
+    -- Prove parts satisfy the computePart characterization
+    -- The circuit expression at index i equals computePart i input[2i] input[2i+1] c
+    -- Both have the same if-then-else structure based on c's bits at positions 2i and 2i+1
+    -- The Nat cast (n : ℕ) : F p equals the Int cast (n : ℤ) : F p for non-negative n
+    -- Helper to evaluate input_var at any index
+    have h_input_eval : ∀ j : ℕ, (hj : j < 254) → input_var[j].eval env = input[j] := by
+      intro j hj
+      have := congrArg (fun v => v[j]) h_input
+      simp only [Vector.getElem_map] at this
+      exact this
+
+    have h_parts' : ∀ i : Fin 127, parts[i] = computePart i.val input[i.val * 2] input[i.val * 2 + 1] c := by
       intro i
-      have h := congrArg (·[i]) h_input
-      simpa using h
+      have h_parts_i := congrArg (fun v => v[i]) h_parts
+      simp only [circuit_norm, Vector.getElem_ofFn, Vector.getElem_mapRange, Vector.getElem_map] at h_parts_i
+      show (Vector.mapRange 127 fun j => env.get (i₀ + j))[i.val] = _
+      simp only [Vector.getElem_mapRange, h_parts_i]
+      -- Push Expression.eval through if-then-else using apply_ite
+      simp only [apply_ite (Expression.eval env)]
+      -- Evaluate the expressions
+      simp only [circuit_norm]
+      -- Use h_input_eval
+      have hi2 : (i : ℕ) * 2 < 254 := by omega
+      have hi2p1 : (i : ℕ) * 2 + 1 < 254 := by omega
+      simp only [h_input_eval _ hi2, h_input_eval _ hi2p1]
+      -- Expand computePart, bCoeff, aCoeff
+      simp only [computePart, bCoeff, aCoeff]
+      have h_pow_le : (2 : ℕ)^(i : ℕ) ≤ 2^128 := Nat.pow_le_pow_right (by omega) (by omega : (i : ℕ) ≤ 128)
+      -- Convert Int casts to Nat casts (they agree for non-negative values)
+      have h_int_eq_nat_sub : ((2^128 - 2^(i : ℕ) : ℤ) : F p) = ((2^128 - 2^(i : ℕ) : ℕ) : F p) := by
+        rw [Int.cast_sub, Nat.cast_sub h_pow_le]
+        simp only [Int.cast_pow, Int.cast_ofNat, Nat.cast_pow, Nat.cast_ofNat]
+      have h_int_eq_nat_pow : ((2^(i : ℕ) : ℤ) : F p) = ((2^(i : ℕ) : ℕ) : F p) := by
+        simp only [Int.cast_pow, Int.cast_ofNat, Nat.cast_pow, Nat.cast_ofNat]
+      simp_rw [h_int_eq_nat_sub, h_int_eq_nat_pow]
+      simp only [Nat.cast_pow, Nat.cast_ofNat, Nat.cast_sub h_pow_le]
+      split_ifs <;> ring
 
-    -- The core mathematical insight: testBit 127 ↔ input > c
-    -- This is proved using sum_bit127_encodes_gt
-    -- For now, the detailed proof is left as sorry pending complete analysis
-    -- of the coefficient structure and comparison algorithm
-    sorry
+    -- Now use the main theorem to connect parts.sum to the comparison
+    have h_sum_encodes := sum_bit127_encodes_gt c h_ct input h_bits parts h_parts'
+
+    -- parts.sum = sout
+    have h_sout' : parts.sum = sout := by
+      show (Vector.mapRange 127 fun i => env.get (i₀ + i)).sum = env.get (i₀ + 127)
+      rw [h_sout]
+      -- Show both vectors are equal, then their sums are equal
+      have h_vec_eq : (Vector.mapRange 127 fun i => env.get (i₀ + i)) =
+                      Vector.map (Expression.eval env) (Vector.mapRange 127 fun i => var { index := i₀ + i }) := by
+        ext j hj
+        simp only [Vector.getElem_mapRange, Vector.getElem_map, circuit_norm]
+      rw [h_vec_eq, vector_sum_map_eval]
+
+    have h_sum_encodes' : sout.val.testBit 127 = (input_val > c) := by
+      rw [← h_sout']
+      exact h_sum_encodes
+
+    -- bits = fieldToBits 135 sout
+    have h_bits' : bits = fieldToBits 135 sout := by
+      show Vector.mapRange 135 (fun i => env.get (i₀ + 127 + 1 + i)) = fieldToBits 135 (env.get (i₀ + 127))
+      have := h_bits_valid
+      simp only [Vector.map_mapRange, circuit_norm] at this
+      ext j hj
+      have := congrArg (fun v => v[j]) this
+      simp only [Vector.getElem_mapRange] at this ⊢
+      exact this
+
+    -- bits[127] encodes the comparison
+    have h_bits_127 : bits[127] = if input_val > c then 1 else 0 := by
+      rw [h_bits']
+      rw [fieldToBits_testBit_127 sout 135 (by omega : 127 < 135)]
+      simp only [h_sum_encodes']
+
+    -- out = bits[127]
+    have h_out' : env.get (i₀ + 127 + 1 + 135) = bits[127] := by
+      show env.get (i₀ + 127 + 1 + 135) = (Vector.mapRange 135 fun i => env.get (i₀ + 127 + 1 + i))[127]
+      simp only [Vector.getElem_mapRange, h_out]
+
+    -- Conclude
+    show env.get (i₀ + 127 + 1 + 135) = if c < fromBits (Vector.map ZMod.val input) then 1 else 0
+    simp only [h_out', h_bits_127, gt_iff_lt, input_val]
 
   completeness := by
-    circuit_proof_start [main, Num2Bits.circuit]
-    sorry
+    circuit_proof_start [Num2Bits.circuit]
+    rcases h_env with ⟨h_parts, h_sout, h_num2bits_impl, h_out⟩
+    rcases h_assumptions with ⟨h_bits, h_ct⟩
+    -- Helper for input evaluation
+    have h_input_eval : ∀ j : ℕ, (hj : j < 254) → input_var[j].eval env = input[j] := by
+      intro j hj
+      have := congrArg (fun v => v[j]) h_input
+      simp only [Vector.getElem_map] at this
+      exact this
+    -- Define local parts vector
+    let parts_vals : Vector (F p) 127 := Vector.mapRange 127 fun i => env.get (i₀ + i)
+    -- Prove parts characterization
+    have h_parts' : ∀ i : Fin 127, parts_vals[i] = computePart i.val input[i.val * 2] input[i.val * 2 + 1] c := by
+      intro i
+      have h_parts_i := h_parts i
+      simp only [circuit_norm, Vector.getElem_ofFn] at h_parts_i
+      show (Vector.mapRange 127 fun j => env.get (i₀ + j))[i.val] = _
+      simp only [Vector.getElem_mapRange, h_parts_i]
+      simp only [apply_ite (Expression.eval env)]
+      simp only [circuit_norm]
+      have hi2 : (i : ℕ) * 2 < 254 := by omega
+      have hi2p1 : (i : ℕ) * 2 + 1 < 254 := by omega
+      simp only [h_input_eval _ hi2, h_input_eval _ hi2p1]
+      simp only [computePart, bCoeff, aCoeff]
+      have h_pow_le : (2 : ℕ)^(i : ℕ) ≤ 2^128 := Nat.pow_le_pow_right (by omega) (by omega : (i : ℕ) ≤ 128)
+      have h_int_eq_nat_sub : ((2^128 - 2^(i : ℕ) : ℤ) : F p) = ((2^128 - 2^(i : ℕ) : ℕ) : F p) := by
+        rw [Int.cast_sub, Nat.cast_sub h_pow_le]
+        simp only [Int.cast_pow, Int.cast_ofNat, Nat.cast_pow, Nat.cast_ofNat]
+      have h_int_eq_nat_pow : ((2^(i : ℕ) : ℤ) : F p) = ((2^(i : ℕ) : ℕ) : F p) := by
+        simp only [Int.cast_pow, Int.cast_ofNat, Nat.cast_pow, Nat.cast_ofNat]
+      simp_rw [h_int_eq_nat_sub, h_int_eq_nat_pow]
+      simp only [Nat.cast_pow, Nat.cast_ofNat, Nat.cast_sub h_pow_le]
+      split_ifs <;> ring
+    -- Now prove sum range bound
+    have h_sout_eq : env.get (i₀ + 127) = parts_vals.sum := by
+      rw [h_sout, vector_sum_map_eval]
+    have h_sum_eq : parts_vals.sum.val = sumRange 127 c input := by
+      exact sum_range_precise c h_bits parts_vals h_parts'
+    have h_sout_bound : (env.get (i₀ + 127)).val < 2^135 := by
+      rw [h_sout_eq, h_sum_eq]
+      exact sumRange_lt_two_pow_135 c h_bits
+    and_intros
+    -- Goal 1: parts vector equality (both sides equal to env.get (i₀ + i))
+    · ext i hi
+      simp only [Vector.getElem_map, Vector.getElem_mapRange, Vector.getElem_ofFn]
+      exact h_parts ⟨i, hi⟩
+    -- Goal 2: sout equality
+    · exact h_sout
+    -- Goal 3: sout range (< 2^135)
+    · exact h_sout_bound
+    -- Goal 4: output equality
+    · exact h_out
 
 end ClaudeCompConstant
 
